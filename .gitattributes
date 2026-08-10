@@ -1,0 +1,20 @@
+# 兩台都是 Windows，但 autocrlf 設定可能不同。明確釘死行為，避免
+# (a) xlsx（本質是 zip）被當文字做 CRLF 轉換而損毀，
+# (b) 兩台 checkout 出不同行尾造成整檔假 diff。
+
+*                text=auto
+
+# 二進位：絕不可做任何行尾轉換
+*.xlsx           binary
+*.xlsb           binary
+*.xls            binary
+*.png            binary
+*.jpg            binary
+*.pdf            binary
+
+# 對帳單 CSV：引擎逐列解析，統一 LF 讓 diff 乾淨
+*.csv            text eol=lf
+
+# xlsx 是 binary，git diff 只會顯示 "Bin"。CS 帳本的文字側寫
+# （CS交易紀錄_dump.csv）才是可讀 diff 的來源。
+CS交易紀錄.xlsx   binary diff=none
