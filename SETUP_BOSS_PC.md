@@ -61,13 +61,19 @@ powershell -ExecutionPolicy Bypass -File .\bootstrap_boss.ps1
 
 ### 1.3 手動補一件事：K 線資料
 
-`history_minute.xlsx`（4.2 MB）**刻意不走 git** —— 它每天被 app 用 yfinance
+`history_minute.xlsx`（4.3 MB）**刻意不走 git** —— 它每天被 app 用 yfinance
 追加，進 git 一年會把 repo 撐到 1 GB。
 
-請從 502 的 `D:\fileserver_D\TradeReview\history_minute.xlsx` 用隨身碟或共享
-複製到 `C:\TradeReview\`。
+它已放在 `_BossPC_安裝包\` 裡，一起帶過去即可：
 
-不複製也能跑，但 app 首次要靠 yfinance 補 318 天，會很慢。
+```powershell
+Copy-Item .\history_minute.xlsx C:\TradeReview\ -Force
+```
+
+🔴 **這個檔一定要帶**。yfinance 的 1 分鐘資料**只回得了最近約 30 天**，
+不帶的話 2026-07 以前的日期會完全沒有 K 線，而且**無從補救**
+（Bloomberg 的 IntradayBarRequest 同樣回不了一年多前的分鐘資料）。
+換句話說：這個檔是唯一的來源，請確保它有另外備份。
 
 ### 1.4 驗收
 
@@ -143,7 +149,7 @@ cd C:\TradeReview
 
 ---
 
-## 4. ⚠️ 尚未解決：對帳單 CSV 的欄位格式不相容
+## 4. ✅ 已解決：對帳單 CSV 的欄位格式（2026-08-10）
 
 TOS 直接匯出的 CSV 表頭是 **10 欄**：
 
@@ -151,21 +157,28 @@ TOS 直接匯出的 CSV 表頭是 **10 欄**：
 Trade Date,Exec Date,Exec Time,Type,Ref #,Description,Misc Fees,Commissions & Fees,Amount,Balance
 ```
 
-但引擎要的是 **9 欄**（`spy_daytrade_engine.py:150` 找不到就直接拒收）：
+而引擎原本只認 **9 欄**（AI 轉錄／OCR 產出的格式）：
 
 ```
 DATE,TIME,TYPE,REF #,DESCRIPTION,Misc Fees,Commissions & Fees,AMOUNT,BALANCE
 ```
 
-`_inbox\2026-08-05.csv` 就是 10 欄格式，引擎目前對它報
-`找不到 Cash Balance 表頭 — Statement 格式不符`。
+**這極可能就是 2026-07-17 停用 CSV 匯出、改走 OCR-only 的真正原因** ——
+OCR 路徑是 AI 在轉錄時順手把 10 欄併成 9 欄，所以看起來「只有 OCR 能用」。
 
-**這很可能就是 2026-07-17 停用 CSV 匯出、改走 OCR-only 的原因** ——
-OCR 路徑是由 AI 在轉錄時順手把 10 欄併成 9 欄（Trade Date/Exec Date → DATE、
-Exec Time → TIME），所以感覺「OCR 能用、CSV 不能用」。
+**現已修好**：`spy_daytrade_engine.py` 的 `parse_statement()` 改為依欄名對應，
+兩種格式都直接吃，**不需要任何轉換步驟**。所以 Boss PC 可以直接把 TOS
+原生匯出檔存進 `_inbox\` 就好。
 
-→ 恢復 CSV 匯出路徑時**必須加一支格式轉換**（10 欄 → 9 欄）。
-這件事還沒做，屬於階段 3/4。
+驗證：
+- 16 個原本可解析的檔，解析結果逐欄不變（零回歸）
+- 3 個原本被拒的 10 欄檔全部可解析
+- 同一份對帳單的 10 欄原生版與 9 欄 AI 轉錄版，切出的 session、
+  期初/收盤餘額、成交筆數完全相同
+
+⚠️ 日期欄取 **Exec Date** 而非 Trade Date：Trade Date 是券商營業日，
+午夜之後成交的列會掛在前一個營業日。實測 `2026-07-29-raw.csv` 有 5 列
+`Trade Date=7/27` 但 `Exec Date=7/28 01:18` —— 取錯就整整差一天。
 
 ### 另一個已知缺口：OCR 漏抓 BAL / DOI / JRN 列
 

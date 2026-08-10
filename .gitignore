@@ -50,3 +50,11 @@ token.json
 .env
 *.lock
 *.tmp.xlsx
+
+# 使用者自備的 K 線備份與損壞檔留存：都是 4 MB 等級，且屬本機資產，不進 git
+history_minute_backup.xlsx
+history_minute_CORRUPT_*.xlsx*
+
+# Boss PC 安裝包：內含 4.3 MB 的 history_minute.xlsx 與 repo 內既有檔案的副本，
+# 是為了「用隨身碟帶去 Boss PC」而存在的組裝產物，不需要進 git。
+_BossPC_安裝包/
