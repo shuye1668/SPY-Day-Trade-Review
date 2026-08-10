@@ -63,12 +63,38 @@ if (-not $isAdmin -and -not $SkipTask) {
 if ($fail) { Write-Host "`n  前置檢查未通過，停止。`n" -ForegroundColor Red; exit 1 }
 
 # ── 2. clone ──────────────────────────────────────────────────────
+# 原生指令寫 stderr 時，搭配 2>&1 與 $ErrorActionPreference='Stop'，
+# PowerShell 會把 git 的「警告」也當成終止錯誤丟出（例如 CRLF 提示）。
+# 成敗只能看 exit code。這裡自帶包裝，不依賴 repo 內的 _git_helper.ps1
+# —— clone 之前那個檔還不存在。
+function Git-Quiet {
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & git.exe @args 2>&1 | Out-Null } finally { $ErrorActionPreference = $prev }
+    return $LASTEXITCODE
+}
+
 Step 2 "取得 repo"
 if (Test-Path (Join-Path $Root '.git')) {
     Ok "$Root 已是 git repo，改為更新"
     Push-Location $Root
-    & git.exe fetch origin 2>&1 | Out-Null
-    & git.exe pull --rebase origin main 2>&1 | Out-Null
+
+    # Boss 不擁有這些檔，本機任何改動都不具權威性 → 直接丟棄，
+    # 否則它們會讓 pull --rebase 失敗（實測 2026-08-10 就卡在這）
+    foreach ($p in @('CS交易紀錄.xlsx','CS交易紀錄_dump.txt','offset_state.json','notes')) {
+        if (Test-Path $p) { Git-Quiet checkout -- $p | Out-Null }
+    }
+
+    Git-Quiet fetch origin | Out-Null
+    # --autostash：剩下的本機改動（例如常駐 app 對 trades_all 的回寫）
+    # 自動收起再放回，不必人工介入
+    if ((Git-Quiet pull --rebase --autostash origin main) -ne 0) {
+        Warn "pull 失敗。請在 $Root 執行 git status 看是什麼擋住，"
+        Warn "     多半是本機有未提交改動；確認不需要保留就用："
+        Warn "     git checkout -- . ; git clean -fd"
+    } else {
+        Ok "已更新到最新版"
+    }
     Pop-Location
 } else {
     if ((Test-Path $Root) -and (Get-ChildItem $Root -Force | Measure-Object).Count -gt 0) {
@@ -82,15 +108,18 @@ if (Test-Path (Join-Path $Root '.git')) {
 }
 
 Push-Location $Root
-& git.exe config user.name  "boss-pc"        2>&1 | Out-Null
-& git.exe config user.email "shuye1668@gmail.com" 2>&1 | Out-Null
+Git-Quiet config user.name  "boss-pc"             | Out-Null
+Git-Quiet config user.email "shuye1668@gmail.com" | Out-Null
 Ok "git 身分已設定"
 
 # ── 3. Python 套件 ────────────────────────────────────────────────
 Step 3 "安裝 Python 套件"
+$prevEap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
 & $PythonExe -m pip install --quiet --upgrade pip 2>&1 | Out-Null
-& $PythonExe -m pip install --quiet flask pandas numpy openpyxl yfinance
-if ($LASTEXITCODE -eq 0) { Ok "flask / pandas / numpy / openpyxl / yfinance" }
+& $PythonExe -m pip install --quiet flask pandas numpy openpyxl yfinance 2>&1 | Out-Null
+$pipRc = $LASTEXITCODE
+$ErrorActionPreference = $prevEap
+if ($pipRc -eq 0) { Ok "flask / pandas / numpy / openpyxl / yfinance" }
 else { Bad "pip 安裝失敗，請手動執行： & `"$PythonExe`" -m pip install flask pandas numpy openpyxl yfinance" }
 
 # ── 4. 開機常駐排程 ───────────────────────────────────────────────
