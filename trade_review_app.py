@@ -227,10 +227,65 @@ def _fetch_yfinance_minute(ticker, date_str):
     return bars
 
 
+def _atomic_to_excel(df, path):
+    """Write df to path atomically: full temp file first, then os.replace().
+
+    to_excel() writes in place, so a second process (or a crash) mid-write leaves a
+    truncated zip — the file is then unrecoverable, not merely stale. That is exactly
+    how history_minute.xlsx was destroyed on 2026-08-10: two app instances appended
+    the same 4.4 MB workbook concurrently and shredded xl/worksheets/sheet1.xml.
+    os.replace() is atomic on the same volume, so readers only ever see a complete file.
+    """
+    # 副檔名必須留 .xlsx —— pandas 由副檔名決定 writer engine
+    tmp = f"{path}.{os.getpid()}.tmp.xlsx"
+    try:
+        df.to_excel(tmp, index=False)
+        os.replace(tmp, path)
+    finally:
+        try:
+            if os.path.exists(tmp): os.remove(tmp)
+        except OSError:
+            pass
+
+
+def _file_lock(path, stale_seconds=300):
+    """Best-effort cross-process lock via O_EXCL lock file. Returns fd or None.
+
+    Guards whole-file xlsx rewrites against a second app instance (scheduled task +
+    a manually started copy is a normal situation here, and both write these files).
+    """
+    lock = path + ".lock"
+    try:
+        age = time.time() - os.path.getmtime(lock)
+        if age > stale_seconds:
+            os.remove(lock)
+    except OSError:
+        pass
+    try:
+        return os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except OSError:
+        return None
+
+
+def _file_unlock(path, fd):
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    try:
+        os.remove(path + ".lock")
+    except OSError:
+        pass
+
+
 def _append_to_history(ticker, date_str, bars):
     """Append new bars to history_minute.xlsx. Creates file if missing.
     Skips if date_str already exists in file (avoid duplicates)."""
     if not bars: return
+    fd = _file_lock(HISTORY_FILE)
+    if fd is None:
+        print(f"[history] append skipped for {date_str}: another process is writing")
+        return
     try:
         # Build rows for this date
         new_rows = []
@@ -254,7 +309,7 @@ def _append_to_history(ticker, date_str, bars):
         else:
             combined = new_df
             os.makedirs(os.path.dirname(HISTORY_FILE), exist_ok=True)
-        combined.to_excel(HISTORY_FILE, index=False)
+        _atomic_to_excel(combined, HISTORY_FILE)
         # Invalidate cache so next read picks up new data
         _history_cache["mtime"] = None
         print(f"[history] appended {len(new_rows)} bars for {date_str} → {HISTORY_FILE}")
@@ -262,6 +317,8 @@ def _append_to_history(ticker, date_str, bars):
         print(f"[history] write FAILED: {HISTORY_FILE} is open in Excel")
     except Exception as e:
         print(f"[history] append failed for {date_str}: {e}")
+    finally:
+        _file_unlock(HISTORY_FILE, fd)
 
 # Cache the loaded trades DataFrame; reload if file mtime changes
 _trades_cache={"mtime":None,"df":None}
@@ -690,15 +747,21 @@ def _analyse_all_trades():
     if _writer_active() and (_any_changed or _rows_merged or _date_col_dirty):
         print("[analyse_all] write-back skipped: .writer.lock held by writer")
     elif _any_changed or _rows_merged or _date_col_dirty:
-        try:
-            for col in ("Action", "Status", "Pair_Date", "Pair_Time"):
-                df[col] = df[col].astype(object).fillna("")
-            df.to_excel(TRADES_FILE, index=False)
-            print(f"[analyse_all] wrote merged DataFrame ({len(df)} rows) to {TRADES_FILE}")
-        except PermissionError:
-            print(f"[analyse_all] write-back FAILED: trades_all.xlsx is open in Excel — close it and refresh")
-        except Exception as e:
-            print(f"[analyse_all] write-back skipped: {type(e).__name__}: {e}")
+        fd = _file_lock(TRADES_FILE)
+        if fd is None:
+            print("[analyse_all] write-back skipped: another process is writing trades_all")
+        else:
+            try:
+                for col in ("Action", "Status", "Pair_Date", "Pair_Time"):
+                    df[col] = df[col].astype(object).fillna("")
+                _atomic_to_excel(df, TRADES_FILE)
+                print(f"[analyse_all] wrote merged DataFrame ({len(df)} rows) to {TRADES_FILE}")
+            except PermissionError:
+                print(f"[analyse_all] write-back FAILED: trades_all.xlsx is open in Excel — close it and refresh")
+            except Exception as e:
+                print(f"[analyse_all] write-back skipped: {type(e).__name__}: {e}")
+            finally:
+                _file_unlock(TRADES_FILE, fd)
 
     by_date = {}
     for t in trades_out:

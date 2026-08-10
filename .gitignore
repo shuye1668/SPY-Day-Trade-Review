@@ -48,3 +48,5 @@ token.json
 *.pem
 *.key
 .env
+*.lock
+*.tmp.xlsx
