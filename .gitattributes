@@ -12,8 +12,14 @@
 *.jpg            binary
 *.pdf            binary
 
-# 對帳單 CSV：引擎逐列解析，統一 LF 讓 diff 乾淨
-*.csv            text eol=lf
+# 對帳單 CSV：不做任何行尾轉換。
+# 兩台都是 Windows，統一 LF 沒有實益；反而因為 checkout 會把工作區轉回
+# CRLF，index 與工作區永遠對不上，讓每次 git pull 都以
+# "You have unstaged changes" 失敗（2026-08-10 Boss PC 就卡在這）。
+# 其中 2026-07-29-raw.csv 每行是雙 CR（CR CR LF），git 直接判定為 binary、
+# 完全不正規化。改為 -text：index 與工作區逐位元組相同，永遠不會假 dirty。
+# 引擎用 csv 模組解析，CRLF/LF 都吃，不受影響。
+*.csv            -text
 
 # xlsx 是 binary，git diff 只會顯示 "Bin"。CS 帳本的文字側寫
 # （CS交易紀錄_dump.csv）才是可讀 diff 的來源。
