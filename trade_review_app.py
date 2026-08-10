@@ -842,18 +842,23 @@ def api_colors():
 
 @app.route("/api/dates")
 def api_dates():
-    """Return all dates that appear in trades_all.xlsx Date column OR in history_minute.xlsx."""
-    dates=set()
+    """Return all selectable dates, and which of them have no K-line data.
+
+    A handful of dates exist in trades_all but not in history_minute (e.g. 2026-06-12,
+    2026-06-15 — too old for yfinance to backfill). They are still listed, because the
+    trades are worth seeing, but the client marks them so picking one is never a
+    surprise: jumpTo() silently walks backwards to the nearest day with candles.
+    """
+    tdates=set()
     df=load_trades_df()
     if df is not None and "Date" in df.columns:
         for v in df["Date"].dropna().unique():
             nd=_norm_date(v)
-            if nd:dates.add(nd)
-    # Also include dates from history_minute.xlsx (so user can jump to any date with K-line data)
+            if nd:tdates.add(nd)
     hist=_load_history_by_date()
-    for d in hist.keys():
-        dates.add(d)
-    return jsonify(sorted(dates,reverse=True))
+    hdates=set(hist.keys())
+    return jsonify({"dates":sorted(tdates|hdates,reverse=True),
+                    "no_candles":sorted(tdates-hdates,reverse=True)})
 
 @app.route("/api/data")
 def api_data():
@@ -886,35 +891,48 @@ HTML=r"""<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="UTF-8">
 <title>Trade Review</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:#000;color:#C0C4CC;font-family:'Consolas','Courier New',monospace;overflow:hidden;height:100vh}
-#hdr{height:26px;display:flex;align-items:center;padding:0 12px;background:#0D0F13;border-bottom:1px solid #1A1D22}
+/* flex column：不再用 calc(100vh - 56px - 105px) 那種寫死高度。
+   工具列一改高度、或瀏覽器字級縮放，寫死的數字就會讓畫布跟容器對不齊。 */
+body{background:#000;color:#C0C4CC;font-family:'Consolas','Courier New',monospace;overflow:hidden;height:100vh;display:flex;flex-direction:column}
+#hdr{height:26px;flex:0 0 auto;display:flex;align-items:center;padding:0 12px;background:#0D0F13;border-bottom:1px solid #1A1D22}
 #hdr .tk{color:#FFF;font-weight:bold;font-size:13px}
 #hdr .lbl{margin-left:auto;background:#FF8C00;color:#000;font-weight:bold;font-size:11px;padding:2px 10px;border-radius:2px}
 /* flex-shrink:0 + nowrap — without them the P&L / trade-count labels get squeezed
    to a fraction of their text width and visually overlap each other, and the
    Export button is clipped off the right edge, below ~950px wide. */
-#tb{height:30px;display:flex;align-items:center;gap:8px;padding:0 12px;background:#0A0C0F;border-bottom:1px solid #1A1D22;font-size:12px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
+#tb{height:38px;flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:0 12px;background:#0A0C0F;border-bottom:1px solid #1A1D22;font-size:12px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
 #tb::-webkit-scrollbar{height:0}
 #tb>*{flex:0 0 auto;white-space:nowrap}
-#tb button{background:#1A1D22;color:#8B8F98;border:1px solid #333640;padding:2px 12px;cursor:pointer;font-family:inherit;font-size:11px;border-radius:2px}
-#tb button:hover{background:#252830;color:#FFF}
-#tb button:disabled{opacity:.45;cursor:default}
-#tb button:disabled:hover{background:#1A1D22;color:#8B8F98}
-#di{background:#000;color:#FF8C00;border:1px solid #333640;font-family:inherit;font-size:13px;font-weight:bold;width:110px;text-align:center;padding:2px 4px;border-radius:2px}
+/* 對比：原本 #8B8F98 on #1A1D22 約 4.4:1、字 11px 又矮，長時間看很吃力。
+   提到 #D4D9E0 約 11:1，字級與點擊區一併放大。 */
+#tb button{background:#20242B;color:#D4D9E0;border:1px solid #3D434E;padding:5px 13px;cursor:pointer;font-family:inherit;font-size:12px;font-weight:bold;border-radius:3px;line-height:1.2}
+#tb button:hover{background:#2E343D;border-color:#5A6270;color:#FFF}
+#tb button:active{background:#3A414C}
+#tb button:focus-visible{outline:2px solid #FF8C00;outline-offset:1px}
+#tb button:disabled{opacity:.4;cursor:default}
+#tb button:disabled:hover{background:#20242B;color:#D4D9E0;border-color:#3D434E}
+#di{background:#000;color:#FF8C00;border:1px solid #3D434E;font-family:inherit;font-size:14px;font-weight:bold;width:118px;text-align:center;padding:5px 4px;border-radius:3px 0 0 3px;letter-spacing:.5px}
 #di:focus{border-color:#FF8C00;outline:none}
+#di::placeholder{color:#5A6270;font-weight:normal}
 .pnl{font-weight:bold;font-size:13px;margin-left:12px}.pnl.w{color:#FFF}.pnl.l{color:#FF4444}
 .tc{color:#8B8F98;font-size:11px}
 #zc{margin-left:auto;display:flex;gap:4px;align-items:center}
-.ind-toggles{display:flex;gap:2px;margin-left:8px;align-items:center}
-.ind-btn{background:#2A2E35;color:#666;border:1px solid #3A3E48;border-radius:3px;padding:1px 6px;font-size:11px;cursor:pointer;font-family:Consolas,monospace;line-height:1.4}
-.ind-btn.on{background:#3A4A5A;color:#E0E0E0;border-color:#5A6A7A}
-#cvsel{margin-left:10px;background:#1a1d24;color:#ccc;border:1px solid #3a3d44;padding:3px 6px;font-size:12px;border-radius:3px;cursor:pointer}
+.ind-toggles{display:flex;gap:3px;margin-left:8px;align-items:center}
+/* 原本 #666 on #2A2E35 只有 2.4:1，關閉狀態幾乎看不見；開/關也難分辨 */
+/* 必須用 #tb 前綴：上面的 `#tb button` 是 ID 選擇器，特異性高於單純的
+   class，否則 .on 的藍底會被它蓋掉，開/關看起來一模一樣。 */
+#tb .ind-btn{background:#20242B;color:#9AA3B0;border:1px solid #3D434E;border-radius:3px;padding:4px 9px;font-size:12px;font-weight:bold;cursor:pointer;font-family:Consolas,monospace;line-height:1.2}
+#tb .ind-btn:hover{background:#2E343D;color:#E6EAF0}
+#tb .ind-btn.on{background:#2C5A8A;color:#FFF;border-color:#5A9BD8}
+#tb .ind-btn.on:hover{background:#356BA3;color:#FFF}
+#cvsel{margin-left:10px;background:#20242B;color:#D4D9E0;border:1px solid #3D434E;padding:5px 7px;font-size:12px;border-radius:3px;cursor:pointer;font-family:inherit}
+#cvsel:hover{border-color:#5A6270}
 #legend{display:inline-flex;gap:10px;margin-left:10px;font-size:12px;align-items:center}
 #legend .sw{display:inline-block;width:12px;height:12px;margin-right:4px;vertical-align:middle;border:1px solid #555}
-#zc button{font-size:13px;padding:2px 10px}
-#cc{position:relative;width:100%;height:calc(100vh - 56px - 105px)}
+#zc button{font-size:14px;padding:5px 12px;min-width:34px}
+#cc{position:relative;width:100%;flex:1 1 auto;min-height:0}
 canvas{display:block;width:100%;height:100%}
-#tb2{height:105px;background:#0A0C0F;border-top:1px solid #1A1D22;display:flex;align-items:stretch;overflow-x:auto;padding:6px 12px;gap:6px}
+#tb2{height:105px;flex:0 0 auto;background:#0A0C0F;border-top:1px solid #1A1D22;display:flex;align-items:stretch;overflow-x:auto;padding:6px 12px;gap:6px}
 .tc2{flex:0 0 auto;min-width:130px;background:#0D0F13;border:1px solid #1A1D22;border-radius:4px;padding:6px 10px;font-size:11px;display:flex;flex-direction:column;justify-content:center;transition:border-color .15s,box-shadow .15s}
 .tc2 .dr{color:#8B8F98;margin-bottom:3px}.tc2 .pv{font-weight:bold;font-size:14px}
 .tc2 .pv.w{color:#FFF}.tc2 .pv.l{color:#FF4444}.tc2 .dt{color:#888;font-size:10px;margin-top:2px}
@@ -939,14 +957,35 @@ canvas{display:block;width:100%;height:100%}
 /* Was position:fixed bottom:6px in #333 — that sat ON TOP of the trade-card bar
    and at ~1.5:1 contrast was effectively invisible. Now it lives in the header
    strip, which has spare room, at a legible grey. */
+/* 日期選擇器：輸入框 + 下拉清單。清單只列「真的有資料的交易日」，
+   所以點選永遠不會落到沒有 K 線的日期；同時保留直接打字 + Enter。 */
+#dwrap{position:relative;display:flex;align-items:center}
+#dtog{background:#20242B;color:#D4D9E0;border:1px solid #3D434E;border-left:none;
+      border-radius:0 3px 3px 0;padding:5px 9px;font-size:11px;cursor:pointer;line-height:1.2}
+#dtog:hover{background:#2E343D;color:#FFF}
+#dlist{display:none;position:absolute;top:100%;left:0;margin-top:3px;z-index:60;
+       background:#12151A;border:1px solid #3D434E;border-radius:4px;
+       max-height:340px;overflow-y:auto;min-width:172px;box-shadow:0 6px 20px rgba(0,0,0,.6)}
+#dlist.show{display:block}
+#dlist .di-item{padding:6px 12px;font-size:13px;color:#C8CDD6;cursor:pointer;white-space:nowrap;
+                display:flex;justify-content:space-between;gap:14px;align-items:baseline}
+#dlist .di-item:hover,#dlist .di-item.sel{background:#2C5A8A;color:#FFF}
+#dlist .di-item .dow{color:#7A8290;font-size:11px}
+#dlist .di-item:hover .dow,#dlist .di-item.sel .dow{color:#CFE0F2}
+#dlist .di-item.cur{color:#FF8C00;font-weight:bold}
+/* 有交易但沒有 K 線的日子：標出來，點下去不會是驚喜 */
+#dlist .di-item.nok{color:#7A8290}
+#dlist .di-item.nok .dow{color:#C08A3E}
+#dlist .di-empty{padding:10px 12px;font-size:12px;color:#7A8290}
 .hint{margin-left:20px;color:#6B7280;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #syncbadge{margin-left:auto;margin-right:14px;font-size:11px;font-weight:bold;white-space:nowrap;cursor:default}
 </style></head><body>
 <div id="hdr"><span class="tk">SPY US Equity</span><span class="hint">拖曳平移（跨日無縫）｜ 滾輪/+- 縮放 ｜ ← → 切日期 ｜ 雙擊文字框編輯 ｜ 底部/右側邊緣拖曳可縮放軸</span><span id="syncbadge" style="display:none"></span><span class="lbl">Intraday Candle Chart</span></div>
 <div id="tb">
-<button id="bp">&#8592; Prev</button>
-<input type="text" id="di" value="---" spellcheck="false">
-<button id="bn">Next &#8594;</button>
+<button id="bp" title="前一個交易日（← 鍵）">&#8592; Prev</button>
+<span id="dwrap"><input type="text" id="di" value="---" spellcheck="false" autocomplete="off"
+  placeholder="YYYY-MM-DD" title="可直接輸入日期後按 Enter，或點右側 ▼ 從清單挑選"><button id="dtog" title="選擇交易日">&#9660;</button><div id="dlist"></div></span>
+<button id="bn" title="後一個交易日（→ 鍵）">Next &#8594;</button>
 <button id="bt" title="跳到最新美股交易日">Today</button>
 <span class="pnl" id="dp">---</span><span class="tc" id="dtc"></span>
 <select id="cvsel" title="色版"></select>
@@ -1178,30 +1217,53 @@ function t2iLocal(hm,candles){
 function autoY(){
   if(exportYOverride)return{pn:exportYOverride.pn,px:exportYOverride.px};
   let mn=1e9,mx=-1e9;
-  const focusDay=dayCache.get(dayList[focusIdx]);
-  if(focusDay&&focusDay.candles&&focusDay.candles.length){
-    focusDay.candles.forEach(c=>{mn=Math.min(mn,c.l);mx=Math.max(mx,c.h);});
-    (focusDay.trades||[]).forEach(t=>{
-      // Skip cross-day and hold trades — their prices may be far from today's range
+
+  // Y 範圍取自「畫面上實際看得到的 K 棒」，而不是焦點日。
+  //
+  // 原本是鎖定 dayList[focusIdx] 那一天的高低價當錨點。焦點日是離螢幕中心
+  // 最近的那天 —— 拖曳跨日時它會在某個瞬間切換，Y 錨點跟著整個跳掉，
+  // 畫面突然上下彈一下。焦點是離散的，所以跳動無法避免。
+  // 改成連續量（可見範圍）之後，平移時 Y 只會平滑跟隨，不會有跳點。
+  const gL=gi2x(M.l),gR=gi2x(W-M.r);
+  dayList.forEach((date,di)=>{
+    const d=dayCache.get(date);
+    if(!d||!d.candles||!d.candles.length)return;
+    const g0=gi(di,0);
+    const i0=Math.max(0,Math.floor(gL-g0)),i1=Math.min(d.candles.length-1,Math.ceil(gR-g0));
+    for(let i=i0;i<=i1;i++){
+      const c=d.candles[i];
+      if(c.l<mn)mn=c.l;
+      if(c.h>mx)mx=c.h;
+    }
+    // 進出場點也要在範圍內，否則交易線會被切掉；留倉/跨日單價格可能離今日很遠，排除
+    (d.trades||[]).forEach(t=>{
       if(t.isHold||t.crossDay)return;
-      if(t.entryPrice!=null){mn=Math.min(mn,t.entryPrice);mx=Math.max(mx,t.entryPrice);}
-      if(t.exitPrice!=null){mn=Math.min(mn,t.exitPrice);mx=Math.max(mx,t.exitPrice);}
+      const ei=t.entryTime?t2iLocal(t.entryTime,d.candles):-1;
+      if(ei>=i0&&ei<=i1&&t.entryPrice!=null){mn=Math.min(mn,t.entryPrice);mx=Math.max(mx,t.entryPrice);}
+      const xi=t.exitTime?t2iLocal(t.exitTime,d.candles):-1;
+      if(xi>=i0&&xi<=i1&&t.exitPrice!=null){mn=Math.min(mn,t.exitPrice);mx=Math.max(mx,t.exitPrice);}
     });
+  });
+
+  if(mn>mx){  // 畫面上沒有任何 K 棒（例如平移到空白區）→ 沿用上一次的範圍，不要亂跳
+    if(_lastY)return{pn:_lastY.pn+panY-_lastY.panY,px:_lastY.px+panY-_lastY.panY};
+    mn=650;mx=660;
   }
-  if(mn>mx){mn=650;mx=660;}
-  // Default: step=1 always (matches export). userYZoom > 1 widens the visible range,
-  // userYZoom < 1 narrows it. Step is chosen so step*7 covers the requested range.
+
   const baseRange=7; // default visible range = $7 (7 grids of $1)
   const targetRange=baseRange*userYZoom;
   const ladder=[0.1,0.2,0.5,1,2,5,10,20,50,100,200,500];
   let step=1;
   for(const s of ladder){if(s*7>=targetRange*1.0){step=s;break;}}
-  // Snap mid to half-step boundary so pn lands exactly on a line position
-  const rawMid=(mn+mx)/2;
-  const mid=Math.round(rawMid/step-0.5)*step+step/2;
+  // 中心不再吸附到半格邊界 —— 那個吸附本身就是量化跳動的來源。
+  // 格線仍然落在整數價位（draw() 用 Math.floor(pn/ps)*ps 起算），不受影響。
+  const mid=(mn+mx)/2;
   const half=step*3.5;
-  return{pn:mid-half+panY,px:mid+half+panY};
+  const r={pn:mid-half+panY,px:mid+half+panY};
+  _lastY={pn:r.pn,px:r.px,panY:panY};
+  return r;
 }
+let _lastY=null;
 
 function yOf(p,pn,px){return M.t+(1-(p-pn)/(px-pn))*cH;}
 function p2y(y,pn,px){return px-((y-M.t)/cH)*(px-pn);}
@@ -2961,9 +3023,16 @@ async function jumpTo(ds){
     await loadDay(ds);
     const day=dayCache.get(ds);
     if(!day||!day.candles||!day.candles.length){
+      const asked=ds;
       const found=await loadTradingDay(ds,-1);
-      if(found){ds=found;}
-      else{document.getElementById("ld").style.display="none";return;}
+      if(found){
+        ds=found;
+        // 不要靜默改跳。使用者明確輸入/點選了某一天，卻看到別天的圖，
+        // 沒有提示的話只會以為是自己看錯或程式壞了。
+        if(typeof showToast==="function")showToast(`${asked} 無 K 線資料，已改顯示 ${found}`);
+      }
+      else{document.getElementById("ld").style.display="none";
+        if(typeof showToast==="function")showToast(`${asked} 無 K 線資料`);return;}
     }
     // Reset and load neighbors first
     dayList=[ds];focusIdx=0;
@@ -3047,7 +3116,10 @@ function updateLegend(){
 
 async function init(){
   await loadColors();
-  const res=await fetch("/api/dates",{cache:"no-store"});const dates=await res.json();
+  const res=await fetch("/api/dates",{cache:"no-store"});const dj=await res.json();
+  const dates=dj.dates||[];
+  allDates=dates;                              // 下拉清單來源
+  noCandleDates=new Set(dj.no_candles||[]);    // 這些日子有交易但沒有 K 線，清單上要標出來
   if(dates.length){await jumpTo(dates[0]);}
   else{const today=getLatestUSTradeDate();await jumpTo(today);}
   seedDataVersion();
@@ -3151,10 +3223,58 @@ document.getElementById("bn").addEventListener("click",async()=>{
 });
 document.getElementById("bt").addEventListener("click",()=>jumpTo(getLatestUSTradeDate()));
 
-const di=document.getElementById("di");
-di.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();di.blur();
-const v=di.value.trim();if(/^\d{4}-\d{2}-\d{2}$/.test(v))jumpTo(v);}});
-di.addEventListener("focus",()=>di.select());
+// ── 日期選擇器（點選為主、鍵盤仍可用）──────────────────────────────
+const di=document.getElementById("di"),dtog=document.getElementById("dtog"),dlist=document.getElementById("dlist");
+let allDates=[],noCandleDates=new Set(),dSel=-1;
+
+function dRender(filter){
+  const cur=dayList[focusIdx]||"";
+  const f=(filter||"").trim();
+  const rows=allDates.filter(d=>!f||d.indexOf(f)>=0);
+  if(!rows.length){dlist.innerHTML='<div class="di-empty">查無符合的交易日</div>';return;}
+  // 只渲染前 400 筆，避免一次塞幾百個節點拖慢開啟速度
+  dlist.innerHTML=rows.slice(0,400).map((d,i)=>
+    `<div class="di-item${d===cur?" cur":""}${i===dSel?" sel":""}${noCandleDates.has(d)?" nok":""}" data-d="${d}">`
+    +`<span>${d}</span><span class="dow">${noCandleDates.has(d)?"無K線":dowStr(d)}</span></div>`).join("");
+  const sel=dlist.querySelector(".di-item.sel")||dlist.querySelector(".di-item.cur");
+  if(sel)sel.scrollIntoView({block:"nearest"});
+}
+function dOpen(){
+  // 開啟時一律列出全部交易日，不要拿輸入框現有的日期當過濾條件 ——
+  // 那會讓「點 ▼」只列出當天自己一筆，等於沒得選。
+  // 過濾只在使用者實際打字（input 事件）時才發生。
+  dSel=-1;dRender("");
+  dlist.classList.add("show");
+}
+function dClose(){dlist.classList.remove("show");dSel=-1;}
+function dPick(v){dClose();di.blur();if(v)jumpTo(v);}
+
+dtog.addEventListener("click",e=>{e.stopPropagation();
+  if(dlist.classList.contains("show"))dClose();else{dOpen();di.focus();di.select();}});
+di.addEventListener("focus",()=>{di.select();dOpen();});
+di.addEventListener("input",()=>{dSel=-1;dRender(di.value);dlist.classList.add("show");});
+dlist.addEventListener("mousedown",e=>{               // mousedown 早於 blur，才點得到
+  const it=e.target.closest(".di-item");if(!it)return;
+  e.preventDefault();dPick(it.dataset.d);});
+di.addEventListener("blur",()=>setTimeout(dClose,120));
+di.addEventListener("keydown",e=>{
+  const items=[...dlist.querySelectorAll(".di-item")];
+  if(e.key==="ArrowDown"||e.key==="ArrowUp"){
+    e.preventDefault();
+    if(!dlist.classList.contains("show"))dOpen();
+    else{dSel=Math.max(0,Math.min(items.length-1,dSel+(e.key==="ArrowDown"?1:-1)));dRender(di.value);}
+    return;
+  }
+  if(e.key==="Escape"){dClose();di.blur();return;}
+  if(e.key==="Enter"){
+    e.preventDefault();
+    if(dSel>=0&&items[dSel]){dPick(items[dSel].dataset.d);return;}
+    const v=di.value.trim();
+    if(/^\d{4}-\d{2}-\d{2}$/.test(v)){dPick(v);}                    // 手打完整日期
+    else if(items.length){dPick(items[0].dataset.d);}               // 打一半 → 取第一個相符
+  }
+});
+document.addEventListener("click",e=>{if(!e.target.closest("#dwrap"))dClose();});
 
 document.getElementById("ns").addEventListener("click",()=>{
   const day=dayCache.get(dayList[focusIdx]);if(day)day.notes=document.getElementById("nt").value;
