@@ -54,8 +54,10 @@ try {
     if (-not $Message) { $Message = "$Owner sync $(Get-Date -f 'yyyy-MM-dd HH:mm')" }
     Invoke-Git commit -m $Message | Out-Null
 
-    # commit 之後才 rebase：working tree 乾淨，rebase 一定能跑
-    Invoke-Git pull --rebase origin main | Out-Null
+    # --autostash：working tree 可能還有「對方所有物」的未 staged 改動
+    # （例如 502 上出現了 Boss 才該寫的 sync_state.json），那會讓 rebase
+    # 直接失敗。autostash 會自動收起再放回，不必人工介入。
+    Invoke-Git pull --rebase --autostash origin main | Out-Null
 
     # push 失敗要重試：無人看管下靜默失敗＝對方拿到舊資料卻不知道
     $ok = $false
@@ -63,7 +65,7 @@ try {
         if ((Try-Git push origin main) -eq 0) { $ok = $true; break }
         Say "  push 第 $i 次失敗，重試..."
         Start-Sleep -Seconds (5 * $i)
-        Try-Git pull --rebase origin main | Out-Null
+        Try-Git pull --rebase --autostash origin main | Out-Null
     }
 
     if ($ok) {
