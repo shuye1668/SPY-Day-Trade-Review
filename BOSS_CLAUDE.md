@@ -44,6 +44,19 @@ Gmail 草稿由 boss 端 Gmail 帳號的 Apps Script 每 5 分鐘自動送到
 工作流程：每個關鍵步驟完成後，用 `Capture-Screen` 存 PNG 到 `logs\`，
 再用 view tool 讀 PNG 確認當下螢幕狀態。視覺確認後再進下一步。
 
+## 執行時機（重要：這台週末關機）
+
+這台機器**週末關機**，週五的交易通常等到**週一較晚（10 點後）開機**才補完成。
+所以：
+
+- **沒有固定執行時間**。routine 在機器開著、TOS 已登入時執行即可。
+- **一次跑就會補完所有欠帳**：步驟 4 設「5 days back」不是為了保險，是必要的 ——
+  週一開機時要一次涵蓋週五（甚至更早漏掉的日子）。writer 會處理 CSV 裡所有
+  session，已寫過的自動冪等跳過。
+- **週一落後一個交易日是正常的**，不是故障。502 的 App 標頭在那段時間會顯示
+  琥珀色「⚠待補前一交易日」，補完就轉回灰色。
+- 若標頭顯示**紅色「✕落後 N 個交易日」**（N≥2），才代表真的有事沒跑成。
+
 ## 常用變數
 
 ```powershell
@@ -297,12 +310,19 @@ cd C:\TradeReview
 $wr = $LASTEXITCODE
 
 # 記錄狀態，供 502 端 App 顯示資料新鮮度
+# ⚠️ 不要帶 --date $today。這台週末關機，週五的帳往往週一才補，
+#    「今天」不等於「資料涵蓋到哪一天」。省略 --date 會自動讀
+#    trades_all 裡真正的最新交易日，那才是 502 該看到的數字。
 if ($wr -eq 0) {
-    & $py write_sync_state.py --date $today
+    & $py write_sync_state.py
 } else {
-    & $py write_sync_state.py --date $today --status blocked --note "writer gate 擋下，需人工確認"
+    & $py write_sync_state.py --status blocked --note "writer gate 擋下，需人工確認"
 }
 ```
+
+> 💡 **catch-up 是自動的**：writer 會處理 CSV 裡**所有** session（步驟 4 的
+> 「5 days back」正是為此），已寫過的自動冪等跳過。所以週一開機時一次跑完，
+> 會把週五（甚至更早漏掉的）一起補上，不需要為每一天各跑一次。
 
 **「全綠」的判準**（引擎輸出）：最後一行 `Σcol1` 與 `Σpnl` **兩個數字一樣**、
 `留倉=False`，而且下面**沒有**「警告 / 需人工確認」那一段。
@@ -506,8 +526,8 @@ Charts 收尾失敗但其餘成功：
 1. `Capture-Screen` 存 debug 截圖到 `logs\debug_<step>_<timestamp>.png`
 2. 建 FAILED 主旨草稿：`[SPY-DayTrade-Autosend] FAILED <date> - <reason>`
 3. log 記 FAIL 行
-4. 執行 `& $py write_sync_state.py --date $today --status failed --note "<reason>"`
-   （讓 502 的 App 標頭轉紅）
+4. 執行 `& $py write_sync_state.py --status failed --note "<reason>"`
+   （讓 502 的 App 標頭轉紅；同樣不要帶 `--date`）
 5. 對話中回報具體失敗位置 + 建議下一步
 
 **例外**：步驟 10（切回 Charts）是收尾動作，失敗為非致命 —— 不建 FAILED 草稿、

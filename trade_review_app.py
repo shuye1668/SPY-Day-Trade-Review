@@ -3099,21 +3099,40 @@ async function checkDataVersion(){
 
 // 同步新鮮度：Boss PC 每次跑完寫 sync_state.json，隨 git 一起同步過來。
 // 少了這個，push 失敗與「今天還沒開盤」在畫面上長得一模一樣。
+// 落後幾個「美股交易日」——刻意不用「距上次更新幾小時」。
+// Boss PC 週末關機，週五的帳要等週一較晚開機才補；用時數判斷的話
+// 每個週末都會固定跨過 30 小時而變紅。每週都在誤報的告警等於沒有告警。
+function tradingDaysBehind(lastDate){
+  if(!lastDate)return 99;
+  const latest=getLatestUSTradeDate();          // 已含週末回溯
+  if(lastDate>=latest)return 0;
+  let n=0,d=new Date(latest+"T12:00:00");
+  const stop=new Date(lastDate+"T12:00:00");
+  while(d>stop&&n<99){
+    d.setDate(d.getDate()-1);
+    if(d.getDay()!==0&&d.getDay()!==6)n++;      // 只數平日
+  }
+  return n;
+}
+
 function renderSyncBadge(s){
   const el=document.getElementById("syncbadge");
   if(!el)return;
   if(!s||!s.updated_utc){el.style.display="none";return;}
   el.style.display="";
-  const ageH=(Date.now()-Date.parse(s.updated_utc))/3600000;
+  const behind=tradingDaysBehind(s.last_trade_date);
   let color="#6B7280",txt=`資料截至 ${s.last_trade_date||"?"}`;
   if(s.status==="blocked"){color="#E0A800";txt+=" ⚠需人工確認";}
   else if(s.status==="failed"){color="#FF4444";txt+=" ✕採集失敗";}
-  // 交易日隔天早上就該有新資料；超過 30 小時沒更新代表同步或採集出事了
-  else if(ageH>30){color="#FF4444";txt+=` ✕已 ${Math.floor(ageH)}h 未更新`;}
-  else if(ageH>18){color="#E0A800";txt+=` ⚠已 ${Math.floor(ageH)}h 未更新`;}
+  // 落後 1 個交易日是正常待處理（例：週一早上，週五的帳還沒補）
+  else if(behind>=2){color="#FF4444";txt+=` ✕落後 ${behind} 個交易日`;}
+  else if(behind===1){color="#E0A800";txt+=" ⚠待補前一交易日";}
   el.style.color=color;
   el.textContent=txt;
-  el.title=`status=${s.status||"?"}  host=${s.host||"?"}  updated=${s.updated_utc}`
+  const ageH=Math.floor((Date.now()-Date.parse(s.updated_utc))/3600000);
+  el.title=`status=${s.status||"?"}  host=${s.host||"?"}\n`
+           +`最新美股交易日=${getLatestUSTradeDate()}  落後=${behind}\n`
+           +`updated=${s.updated_utc}（${ageH}h 前）`
            +(s.note?`\n${s.note}`:"");
 }
 setInterval(checkDataVersion,4000);                 // poll every 4s
