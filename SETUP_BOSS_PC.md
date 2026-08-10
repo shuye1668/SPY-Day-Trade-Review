@@ -113,7 +113,7 @@ $csv = "C:\TradeReview\_inbox\$today.csv"
 
 ```powershell
 cd C:\TradeReview
-.\sync_push.ps1 -Owner boss
+powershell -ExecutionPolicy Bypass -File C:\TradeReview\sync_push.ps1 -Owner boss
 ```
 
 ### 2.3 被 gate 擋下時怎麼辦（無人看管的正確行為）
@@ -218,7 +218,7 @@ OCR 路徑是 AI 在轉錄時順手把 10 欄併成 9 欄，所以看起來「�
 | 狀況 | 處理 |
 |---|---|
 | `.ps1` 一執行就一堆語法錯誤 | PowerShell 5.1 讀沒有 BOM 的 UTF-8 會當 ANSI。跑 `python _fix_ps1_bom.py` |
-| `git pull` 說 unstaged changes | 跑 `.\sync_pull.ps1 -Owner boss`，它會先丟棄對方所有物再 pull |
+| `git pull` 說 unstaged changes | 跑 `powershell -ExecutionPolicy Bypass -File C:\TradeReview\sync_pull.ps1 -Owner boss`，它會先丟棄對方所有物再 pull |
 | port 5500 被佔用 | `Get-NetTCPConnection -LocalPort 5500 -State Listen` 找出 PID 後處理 |
 | app 起不來但沒有錯誤訊息 | pythonw 無主控台，看 `_logs\trade_review_app.log` |
 | writer 說「鎖檔存在（Excel 開著？）」 | 有人開著 xlsx，關掉再跑 |
