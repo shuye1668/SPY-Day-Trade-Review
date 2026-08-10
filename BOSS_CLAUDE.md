@@ -229,6 +229,22 @@ if (Test-Path $f) { (Get-Item $f).Length } else { "MISSING" }
 - 檔案存在且 **> 500 bytes** → 成功，**跳到步驟 6.5**（不需要 OCR）
 - 否則 → 走步驟 5'
 
+### ⚠️ 這條路徑截至 2026-08-10 尚未實機驗證過
+
+CSV 匯出從 2026-07-17 起就沒用過（當時改走 OCR-only，原因已不可考；
+引擎端的 10 欄相容問題已修好，但 **TOS 介面這一段沒人跑過**）。
+
+所以**嚴格限制重試次數**：
+
+- 找不到三條線／選單裡沒有 Export to file → **最多找 2 次**（可 `Capture-Region`
+  zoom 右上角再確認一次），找不到就**直接走步驟 5'**，不要繼續嘗試其他選單
+- Save dialog 沒出現，或出現後存檔失敗 → **最多重試 1 次**，仍失敗就走步驟 5'
+- 任何情況下都**不要**去點 TOS 其他功能表探索
+
+降級到 OCR 是完全正常的結果，不是失敗 —— 步驟 5' + 6 一樣能產出合格的 CSV。
+在 log 與 Gmail 草稿的 `Source:` 欄註明走了哪條路徑即可，這樣才知道
+CSV 路徑到底能不能用。
+
 > 💡 匯出的表頭是 10 欄
 > （`Trade Date,Exec Date,Exec Time,Type,Ref #,Description,Misc Fees,Commissions & Fees,Amount,Balance`），
 > 引擎會依欄名自動對應，**不需要任何轉換**。
