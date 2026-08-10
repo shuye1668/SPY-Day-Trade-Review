@@ -1,0 +1,50 @@
+# ─────────────────────────────────────────────────────────────
+# SPY Day Trade Review — 同步邊界
+#
+# 進 git 的是「帳與料」：trades_all.xlsx、CS交易紀錄.xlsx、offset_state.json、
+# _inbox\*.csv（原始對帳單）、notes\、程式碼。每日新增約 170 KB。
+#
+# 排除的是「可重建、每台各自、或會把 repo 撐爆」的東西。
+# ─────────────────────────────────────────────────────────────
+
+# 4.2 MB 且常駐 app 每天用 yfinance 追加 → 進 git 一年就 1 GB。
+# 各機自行重建（app 會自動補抓），首次建置用隨身碟/共享手動帶過去。
+history_minute.xlsx
+
+# 每日備份（33 個檔、2.8 MB）。writer 寫入前自動產生，屬本機保護機制，不需跨機同步。
+*_backup_*.xlsx
+*_backup_*.json
+*.bak_*
+*.bak
+
+# Excel 鎖檔
+~$*.xlsx
+
+# writer / git commit 期間的互斥鎖（純本機執行期狀態）
+.writer.lock
+
+# 每台機器各自的執行紀錄與快取
+_logs/
+__pycache__/
+candles/
+daily_cache/
+blank_out/
+output/
+data/
+app.err
+app.log
+app_start.err
+
+# 舊檔封存，不需跨機
+archive/
+
+# 本機專屬設定（每台的權限允許清單不同）
+.claude/settings.local.json
+
+# 憑證：目前資料夾裡沒有這些檔，但 Gmail OAuth 流程一旦在此重跑會自動產生
+# （MIGRATION.md:141 有記載）。先擋著，避免哪天被無聲提交上去。
+credentials.json
+token.json
+*.pem
+*.key
+.env
