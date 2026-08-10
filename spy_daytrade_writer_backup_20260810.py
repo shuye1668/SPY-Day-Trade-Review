@@ -220,7 +220,7 @@ def append_hold_section(ws, rows):
 
 
 def write_cumulative(wb, session, day_pnl):
-    cs = wb["累積損益check"]  # 選 sheet 用名稱，避免夾層 Sheet1 造成 index 位移（2026-08-10 修）
+    cs = wb.worksheets[1]  # 累積損益check
     last = last_nonempty_row(cs, ncols=3)
     r = last + 1
     y, m, d = [int(x) for x in session.edt_date.split("-")]
@@ -302,39 +302,40 @@ def commit_trades_only(sessions, trades_path=TRADES_PATH_DEFAULT):
     print(f"§3 備份：{os.path.basename(b)}")
 
     try:
-        wb_tr = openpyxl.load_workbook(trades_path)
-        tr = wb_tr.active
+        with writer_lock():
+            wb_tr = openpyxl.load_workbook(trades_path)
+            tr = wb_tr.active
 
-        written = 0
-        for s in sessions:
-            if day_already_in_trades(tr, s.edt_date):
-                print(f"— {s.edt_date} 已存在於 trades_all（冪等跳過，不重寫）")
-                continue
-            backlink_pairs(s)
-            n_before = tr.max_row
-            write_trades_all(tr, s)
-            written += 1
-            print(f"✔ {s.edt_date} 寫入 trades_all：{tr.max_row - n_before} 列")
+            written = 0
+            for s in sessions:
+                if day_already_in_trades(tr, s.edt_date):
+                    print(f"— {s.edt_date} 已存在於 trades_all（冪等跳過，不重寫）")
+                    continue
+                backlink_pairs(s)
+                n_before = tr.max_row
+                write_trades_all(tr, s)
+                written += 1
+                print(f"✔ {s.edt_date} 寫入 trades_all：{tr.max_row - n_before} 列")
 
-        if written == 0:
-            print("（無新資料可寫——所有 session 皆已存在，冪等跳過）")
+            if written == 0:
+                print("（無新資料可寫——所有 session 皆已存在，冪等跳過）")
+                return True
+
+            wb_tr.save(trades_path)
+
+            # 寫後核驗（§四.6）：新列 Date 欄必須是 str，不能是 datetime
+            wb_chk = openpyxl.load_workbook(trades_path)
+            ws_chk = wb_chk.active
+            bad = [r for r in range(2, ws_chk.max_row + 1)
+                   if isinstance(ws_chk.cell(r, 1).value, datetime)]
+            if bad:
+                raise RuntimeError(f"§4.6 Date 欄型別錯誤（datetime）於列 {bad[:5]}")
+            for s in sessions:
+                if not day_already_in_trades(ws_chk, s.edt_date):
+                    raise RuntimeError(f"§4 寫後核驗失敗：{s.edt_date} 未出現在 trades_all")
+
+            print(f"✅ {written} 個交易日寫入 trades_all 完成並通過核驗")
             return True
-
-        wb_tr.save(trades_path)
-
-        # 寫後核驗（§四.6）：新列 Date 欄必須是 str，不能是 datetime
-        wb_chk = openpyxl.load_workbook(trades_path)
-        ws_chk = wb_chk.active
-        bad = [r for r in range(2, ws_chk.max_row + 1)
-               if isinstance(ws_chk.cell(r, 1).value, datetime)]
-        if bad:
-            raise RuntimeError(f"§4.6 Date 欄型別錯誤（datetime）於列 {bad[:5]}")
-        for s in sessions:
-            if not day_already_in_trades(ws_chk, s.edt_date):
-                raise RuntimeError(f"§4 寫後核驗失敗：{s.edt_date} 未出現在 trades_all")
-
-        print(f"✅ {written} 個交易日寫入 trades_all 完成並通過核驗")
-        return True
     except Exception as e:
         shutil.copy2(b, trades_path)
         print(f"❌ 寫入失敗，已還原備份：{e}")
@@ -364,6 +365,7 @@ def commit(sessions, cs_path=CS_PATH_DEFAULT, trades_path=TRADES_PATH_DEFAULT,
     print(f"§3 備份：{os.path.basename(b1)} / {os.path.basename(b2)}")
 
     try:
+      with writer_lock():
         wb_cs = openpyxl.load_workbook(cs_path)
         ws = wb_cs[SHEET_DETAIL]
         wb_tr = openpyxl.load_workbook(trades_path)
@@ -436,13 +438,10 @@ def main():
     for s in sessions:
         process_session(s)
     if a.commit:
-        # 鎖在呼叫端取得，一處涵蓋備份與兩條寫入路徑，
-        # commit()/commit_trades_only() 內部完全不必改動。
-        with writer_lock():
-            if a.trades_only:
-                ok = commit_trades_only(sessions, a.trades)
-            else:
-                ok = commit(sessions, a.cs, a.trades)
+        if a.trades_only:
+            ok = commit_trades_only(sessions, a.trades)
+        else:
+            ok = commit(sessions, a.cs, a.trades)
         sys.exit(0 if ok else 2)   # 被 gate 擋下時回非 0，讓呼叫端腳本知道別繼續
     else:
         mode = "trades-only" if a.trades_only else "full"

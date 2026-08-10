@@ -30,7 +30,7 @@ DIVIDENDS_FILE=_os.path.join(ROOT_FOLDER,"dividends.xlsx")
 TICKER="SPY US Equity"
 PORT=5500
 
-import datetime as dt,json,os,glob,warnings,sys,logging
+import datetime as dt,json,os,glob,warnings,sys,logging,time
 warnings.filterwarnings("ignore")
 import pandas as pd,numpy as np
 from flask import Flask,jsonify,request
@@ -683,7 +683,13 @@ def _analyse_all_trades():
                 _any_changed = True
 
     # Only write back if something changed (avoid unnecessary IO + mtime churn)
-    if _any_changed or _rows_merged or _date_col_dirty:
+    # ...and never while spy_daytrade_writer holds the lock: openpyxl's save is not
+    # atomic, so a concurrent write-back would clobber it (or be clobbered). Skipping
+    # is safe — the writer's save bumps mtime, which re-triggers this analysis and the
+    # write-back then happens with the lock released.
+    if _writer_active() and (_any_changed or _rows_merged or _date_col_dirty):
+        print("[analyse_all] write-back skipped: .writer.lock held by writer")
+    elif _any_changed or _rows_merged or _date_col_dirty:
         try:
             for col in ("Action", "Status", "Pair_Date", "Pair_Time"):
                 df[col] = df[col].astype(object).fillna("")
@@ -705,6 +711,25 @@ def _analyse_all_trades():
     _analysis_cache["mtime"] = new_mtime
     _analysis_cache["by_date"] = by_date
     return by_date
+
+
+WRITER_LOCK = _os.path.join(ROOT_FOLDER, ".writer.lock")
+_STALE_LOCK_SECONDS = 600   # writer 正常執行是秒級；逾時代表被強制中斷後殘留
+
+def _writer_active():
+    """spy_daytrade_writer 是否正持有寫入鎖。
+
+    殘留鎖必須逾時失效，否則 writer 一次被強制中斷就會讓常駐 app 永遠不再回寫
+    配對結果，而且完全沒有徵兆。
+    """
+    try:
+        age = time.time() - os.path.getmtime(WRITER_LOCK)
+    except OSError:
+        return False
+    if age > _STALE_LOCK_SECONDS:
+        print(f"[analyse_all] ignoring stale .writer.lock ({age:.0f}s old)")
+        return False
+    return True
 
 
 def read_and_pair_for_date(date_str):
