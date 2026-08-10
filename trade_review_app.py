@@ -911,9 +911,14 @@ body{background:#000;color:#C0C4CC;font-family:'Consolas','Courier New',monospac
 #tb button:focus-visible{outline:2px solid #FF8C00;outline-offset:1px}
 #tb button:disabled{opacity:.4;cursor:default}
 #tb button:disabled:hover{background:#20242B;color:#D4D9E0;border-color:#3D434E}
-#di{background:#000;color:#FF8C00;border:1px solid #3D434E;font-family:inherit;font-size:14px;font-weight:bold;width:118px;text-align:center;padding:5px 4px;border-radius:3px 0 0 3px;letter-spacing:.5px}
-#di:focus{border-color:#FF8C00;outline:none}
-#di::placeholder{color:#5A6270;font-weight:normal}
+/* 年月日三格 —— 一般日期輸入的習慣：分段、可各自打數字、滿位自動跳下一格 */
+#dbox{display:flex;align-items:center;background:#000;border:1px solid #3D434E;border-radius:3px 0 0 3px;padding:2px 4px}
+#dbox.focus{border-color:#FF8C00}
+.dseg{background:transparent;color:#FF8C00;border:none;outline:none;font-family:inherit;
+      font-size:14px;font-weight:bold;text-align:center;padding:3px 1px;letter-spacing:.5px}
+#dY{width:44px}#dM{width:26px}#dD{width:26px}
+.dseg:focus{background:#2C5A8A;color:#FFF;border-radius:2px}
+.dsep{color:#5A6270;font-size:14px;font-weight:bold;user-select:none}
 .pnl{font-weight:bold;font-size:13px;margin-left:12px}.pnl.w{color:#FFF}.pnl.l{color:#FF4444}
 .tc{color:#8B8F98;font-size:11px}
 #zc{margin-left:auto;display:flex;gap:4px;align-items:center}
@@ -957,25 +962,35 @@ canvas{display:block;width:100%;height:100%}
 /* Was position:fixed bottom:6px in #333 — that sat ON TOP of the trade-card bar
    and at ~1.5:1 contrast was effectively invisible. Now it lives in the header
    strip, which has spare room, at a legible grey. */
-/* 日期選擇器：輸入框 + 下拉清單。清單只列「真的有資料的交易日」，
-   所以點選永遠不會落到沒有 K 線的日期；同時保留直接打字 + Enter。 */
+/* 日期選擇器：年月日三格 + 迷你日曆 */
 #dwrap{position:relative;display:flex;align-items:center}
 #dtog{background:#20242B;color:#D4D9E0;border:1px solid #3D434E;border-left:none;
-      border-radius:0 3px 3px 0;padding:5px 9px;font-size:11px;cursor:pointer;line-height:1.2}
+      border-radius:0 3px 3px 0;padding:5px 9px;font-size:13px;cursor:pointer;line-height:1.2}
 #dtog:hover{background:#2E343D;color:#FFF}
-#dlist{display:none;position:absolute;top:100%;left:0;margin-top:3px;z-index:60;
-       background:#12151A;border:1px solid #3D434E;border-radius:4px;
-       max-height:340px;overflow-y:auto;min-width:172px;box-shadow:0 6px 20px rgba(0,0,0,.6)}
-#dlist.show{display:block}
-#dlist .di-item{padding:6px 12px;font-size:13px;color:#C8CDD6;cursor:pointer;white-space:nowrap;
-                display:flex;justify-content:space-between;gap:14px;align-items:baseline}
-#dlist .di-item:hover,#dlist .di-item.sel{background:#2C5A8A;color:#FFF}
-#dlist .di-item .dow{color:#7A8290;font-size:11px}
-#dlist .di-item:hover .dow,#dlist .di-item.sel .dow{color:#CFE0F2}
-#dlist .di-item.cur{color:#FF8C00;font-weight:bold}
-/* 有交易但沒有 K 線的日子：標出來，點下去不會是驚喜 */
-#dlist .di-item.nok{color:#7A8290}
-#dlist .di-item.nok .dow{color:#C08A3E}
+
+#dcal{display:none;position:absolute;top:100%;left:0;margin-top:4px;z-index:60;
+      background:#12151A;border:1px solid #3D434E;border-radius:5px;padding:8px;
+      box-shadow:0 8px 24px rgba(0,0,0,.65);user-select:none}
+#dcal.show{display:block}
+#dcal .cal-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;gap:6px}
+#dcal .cal-hd .ttl{color:#E6EAF0;font-size:13px;font-weight:bold;min-width:96px;text-align:center}
+#dcal .cal-nav{background:#20242B;color:#D4D9E0;border:1px solid #3D434E;border-radius:3px;
+               width:26px;height:24px;font-size:13px;cursor:pointer;line-height:1;padding:0}
+#dcal .cal-nav:hover{background:#2E343D;color:#FFF}
+#dcal table{border-collapse:separate;border-spacing:2px}
+#dcal th{color:#7A8290;font-size:11px;font-weight:normal;width:30px;padding:2px 0}
+#dcal th.we{color:#5A6270}
+#dcal td{width:30px;height:26px;text-align:center;font-size:12px;border-radius:3px;
+         color:#3A4048;                    /* 預設＝非交易日，明顯壓暗 */
+         cursor:default}
+#dcal td.has{color:#D4D9E0;background:#20242B;cursor:pointer;font-weight:bold}  /* 有 K 線＝可點 */
+#dcal td.has:hover{background:#2E343D;color:#FFF}
+#dcal td.nok{color:#C08A3E;background:#241E14;cursor:pointer}   /* 有交易但無 K 線 */
+#dcal td.nok:hover{background:#33291B;color:#E0A860}
+#dcal td.cur{background:#FF8C00;color:#000}
+#dcal td.today{outline:1px solid #5A6270}
+#dcal .cal-ft{margin-top:6px;color:#7A8290;font-size:10px;text-align:center;line-height:1.5}
+#dcal .cal-ft b{color:#D4D9E0}
 #dlist .di-empty{padding:10px 12px;font-size:12px;color:#7A8290}
 .hint{margin-left:20px;color:#6B7280;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #syncbadge{margin-left:auto;margin-right:14px;font-size:11px;font-weight:bold;white-space:nowrap;cursor:default}
@@ -983,8 +998,7 @@ canvas{display:block;width:100%;height:100%}
 <div id="hdr"><span class="tk">SPY US Equity</span><span class="hint">拖曳平移（跨日無縫）｜ 滾輪/+- 縮放 ｜ ← → 切日期 ｜ 雙擊文字框編輯 ｜ 底部/右側邊緣拖曳可縮放軸</span><span id="syncbadge" style="display:none"></span><span class="lbl">Intraday Candle Chart</span></div>
 <div id="tb">
 <button id="bp" title="前一個交易日（← 鍵）">&#8592; Prev</button>
-<span id="dwrap"><input type="text" id="di" value="---" spellcheck="false" autocomplete="off"
-  placeholder="YYYY-MM-DD" title="可直接輸入日期後按 Enter，或點右側 ▼ 從清單挑選"><button id="dtog" title="選擇交易日">&#9660;</button><div id="dlist"></div></span>
+<span id="dwrap" title="可直接輸入數字；↑↓ 切換前後交易日；點日曆圖示選日期"><span id="dbox"><input class="dseg" id="dY" maxlength="4" inputmode="numeric" autocomplete="off" spellcheck="false"><span class="dsep">-</span><input class="dseg" id="dM" maxlength="2" inputmode="numeric" autocomplete="off" spellcheck="false"><span class="dsep">-</span><input class="dseg" id="dD" maxlength="2" inputmode="numeric" autocomplete="off" spellcheck="false"></span><button id="dtog" title="開啟日曆">&#128197;</button><div id="dcal"></div></span>
 <button id="bn" title="後一個交易日（→ 鍵）">Next &#8594;</button>
 <button id="bt" title="跳到最新美股交易日">Today</button>
 <span class="pnl" id="dp">---</span><span class="tc" id="dtc"></span>
@@ -1287,7 +1301,7 @@ function updateFocus(){
 function updateToolbar(){
   const date=dayList[focusIdx]||"";
   const day=dayCache.get(date);
-  document.getElementById("di").value=date;
+  setDateBoxes(date);
   const pe=document.getElementById("dp"),dtc=document.getElementById("dtc");
   if(!day||day.noTrading){pe.textContent="非交易日";pe.className="pnl";pe.style.color="#8B8F98";dtc.textContent="";}
   else if(!day.trades||!day.trades.length){pe.textContent="無當日交易記錄";pe.className="pnl";pe.style.color="#8B8F98";dtc.textContent="";}
@@ -3118,8 +3132,9 @@ async function init(){
   await loadColors();
   const res=await fetch("/api/dates",{cache:"no-store"});const dj=await res.json();
   const dates=dj.dates||[];
-  allDates=dates;                              // 下拉清單來源
-  noCandleDates=new Set(dj.no_candles||[]);    // 這些日子有交易但沒有 K 線，清單上要標出來
+  allDates=dates;                              // 日曆用來判斷哪些日子可點
+  allDateSet=new Set(dates);
+  noCandleDates=new Set(dj.no_candles||[]);    // 有交易但沒有 K 線，日曆上標成褐色
   if(dates.length){await jumpTo(dates[0]);}
   else{const today=getLatestUSTradeDate();await jumpTo(today);}
   seedDataVersion();
@@ -3223,58 +3238,112 @@ document.getElementById("bn").addEventListener("click",async()=>{
 });
 document.getElementById("bt").addEventListener("click",()=>jumpTo(getLatestUSTradeDate()));
 
-// ── 日期選擇器（點選為主、鍵盤仍可用）──────────────────────────────
-const di=document.getElementById("di"),dtog=document.getElementById("dtog"),dlist=document.getElementById("dlist");
-let allDates=[],noCandleDates=new Set(),dSel=-1;
+// ── 日期選擇器：年月日三格 + 迷你日曆 ────────────────────────────────
+const dY=document.getElementById("dY"),dM=document.getElementById("dM"),dD=document.getElementById("dD"),
+      dbox=document.getElementById("dbox"),dtog=document.getElementById("dtog"),dcal=document.getElementById("dcal");
+const dsegs=[dY,dM,dD];
+let allDates=[],allDateSet=new Set(),noCandleDates=new Set();
+let calY=null,calM=null;   // 日曆目前顯示的年/月（1-12）
 
-function dRender(filter){
+const pad=(n,w)=>String(n).padStart(w,"0");
+function dateBoxFocused(){return dsegs.indexOf(document.activeElement)>=0;}
+function setDateBoxes(ds){
+  if(!ds||!/^\d{4}-\d{2}-\d{2}$/.test(ds)){dY.value="";dM.value="";dD.value="";return;}
+  dY.value=ds.slice(0,4);dM.value=ds.slice(5,7);dD.value=ds.slice(8,10);
+}
+function readDateBoxes(){
+  const y=dY.value.trim(),m=dM.value.trim(),d=dD.value.trim();
+  if(!/^\d{4}$/.test(y)||!/^\d{1,2}$/.test(m)||!/^\d{1,2}$/.test(d))return null;
+  const mm=+m,dd=+d;
+  if(mm<1||mm>12||dd<1||dd>31)return null;
+  return `${y}-${pad(mm,2)}-${pad(dd,2)}`;
+}
+
+// ── 迷你日曆 ──
+function calRender(){
   const cur=dayList[focusIdx]||"";
-  const f=(filter||"").trim();
-  const rows=allDates.filter(d=>!f||d.indexOf(f)>=0);
-  if(!rows.length){dlist.innerHTML='<div class="di-empty">查無符合的交易日</div>';return;}
-  // 只渲染前 400 筆，避免一次塞幾百個節點拖慢開啟速度
-  dlist.innerHTML=rows.slice(0,400).map((d,i)=>
-    `<div class="di-item${d===cur?" cur":""}${i===dSel?" sel":""}${noCandleDates.has(d)?" nok":""}" data-d="${d}">`
-    +`<span>${d}</span><span class="dow">${noCandleDates.has(d)?"無K線":dowStr(d)}</span></div>`).join("");
-  const sel=dlist.querySelector(".di-item.sel")||dlist.querySelector(".di-item.cur");
-  if(sel)sel.scrollIntoView({block:"nearest"});
+  if(calY===null){const b=(cur||getLatestUSTradeDate());calY=+b.slice(0,4);calM=+b.slice(5,7);}
+  const first=new Date(calY,calM-1,1), lead=first.getDay(),
+        ndays=new Date(calY,calM,0).getDate(),
+        todayStr=getLatestUSTradeDate();
+  let cells="",dayN=1;
+  for(let r=0;r<6;r++){
+    let row="";
+    for(let c=0;c<7;c++){
+      if((r===0&&c<lead)||dayN>ndays){row+="<td></td>";continue;}
+      const ds=`${calY}-${pad(calM,2)}-${pad(dayN,2)}`;
+      const cls=[];
+      if(noCandleDates.has(ds))cls.push("nok");
+      else if(allDateSet.has(ds))cls.push("has");
+      if(ds===cur)cls.push("cur");
+      if(ds===todayStr)cls.push("today");
+      row+=`<td class="${cls.join(" ")}" data-d="${ds}">${dayN}</td>`;
+      dayN++;
+    }
+    cells+=`<tr>${row}</tr>`;
+    if(dayN>ndays)break;
+  }
+  dcal.innerHTML=
+    `<div class="cal-hd"><button class="cal-nav" data-mv="-1">&#8249;</button>`
+   +`<span class="ttl">${calY} 年 ${calM} 月</span>`
+   +`<button class="cal-nav" data-mv="1">&#8250;</button></div>`
+   +`<table><tr><th class="we">日</th><th>一</th><th>二</th><th>三</th><th>四</th><th>五</th><th class="we">六</th></tr>`
+   +cells+`</table>`
+   +`<div class="cal-ft"><b>亮＝可檢視</b>　<span style="color:#FF8C00">橘底＝目前</span>`
+   +`　<span style="color:#C08A3E">褐＝有交易無 K 線</span>　暗＝休市</div>`;
 }
-function dOpen(){
-  // 開啟時一律列出全部交易日，不要拿輸入框現有的日期當過濾條件 ——
-  // 那會讓「點 ▼」只列出當天自己一筆，等於沒得選。
-  // 過濾只在使用者實際打字（input 事件）時才發生。
-  dSel=-1;dRender("");
-  dlist.classList.add("show");
+function calOpen(){
+  const cur=dayList[focusIdx]||"";
+  if(cur){calY=+cur.slice(0,4);calM=+cur.slice(5,7);}
+  calRender();dcal.classList.add("show");
 }
-function dClose(){dlist.classList.remove("show");dSel=-1;}
-function dPick(v){dClose();di.blur();if(v)jumpTo(v);}
+function calClose(){dcal.classList.remove("show");}
 
 dtog.addEventListener("click",e=>{e.stopPropagation();
-  if(dlist.classList.contains("show"))dClose();else{dOpen();di.focus();di.select();}});
-di.addEventListener("focus",()=>{di.select();dOpen();});
-di.addEventListener("input",()=>{dSel=-1;dRender(di.value);dlist.classList.add("show");});
-dlist.addEventListener("mousedown",e=>{               // mousedown 早於 blur，才點得到
-  const it=e.target.closest(".di-item");if(!it)return;
-  e.preventDefault();dPick(it.dataset.d);});
-di.addEventListener("blur",()=>setTimeout(dClose,120));
-di.addEventListener("keydown",e=>{
-  const items=[...dlist.querySelectorAll(".di-item")];
-  if(e.key==="ArrowDown"||e.key==="ArrowUp"){
-    e.preventDefault();
-    if(!dlist.classList.contains("show"))dOpen();
-    else{dSel=Math.max(0,Math.min(items.length-1,dSel+(e.key==="ArrowDown"?1:-1)));dRender(di.value);}
-    return;
-  }
-  if(e.key==="Escape"){dClose();di.blur();return;}
-  if(e.key==="Enter"){
-    e.preventDefault();
-    if(dSel>=0&&items[dSel]){dPick(items[dSel].dataset.d);return;}
-    const v=di.value.trim();
-    if(/^\d{4}-\d{2}-\d{2}$/.test(v)){dPick(v);}                    // 手打完整日期
-    else if(items.length){dPick(items[0].dataset.d);}               // 打一半 → 取第一個相符
-  }
+  if(dcal.classList.contains("show"))calClose();else calOpen();});
+dcal.addEventListener("mousedown",e=>{     // mousedown 早於 blur，才點得到
+  const nav=e.target.closest(".cal-nav");
+  if(nav){e.preventDefault();calM+= +nav.dataset.mv;
+    if(calM<1){calM=12;calY--;}else if(calM>12){calM=1;calY++;}
+    calRender();return;}
+  const td=e.target.closest("td[data-d]");
+  if(!td||(!td.classList.contains("has")&&!td.classList.contains("nok")))return;  // 非交易日不可點
+  e.preventDefault();calClose();jumpTo(td.dataset.d);
 });
-document.addEventListener("click",e=>{if(!e.target.closest("#dwrap"))dClose();});
+document.addEventListener("click",e=>{if(!e.target.closest("#dwrap"))calClose();});
+
+// ── 三格輸入 ──
+dsegs.forEach((el,idx)=>{
+  el.addEventListener("focus",()=>{el.select();dbox.classList.add("focus");});
+  el.addEventListener("blur",()=>setTimeout(()=>{if(!dateBoxFocused())dbox.classList.remove("focus");},0));
+  el.addEventListener("input",()=>{
+    el.value=el.value.replace(/\D/g,"");
+    // 填滿就自動跳下一格，這是分段日期輸入的基本手感
+    if(el.value.length>=el.maxLength&&idx<2)dsegs[idx+1].focus();
+  });
+  el.addEventListener("keydown",e=>{
+    // ↑↓：前後交易日（跟 ←/→ 按鈕同語意，會自動跳過休市日）
+    if(e.key==="ArrowUp"||e.key==="ArrowDown"){
+      e.preventDefault();
+      const cur=dayList[focusIdx]||dayList[0];
+      if(!cur)return;
+      loadTradingDay(cur,e.key==="ArrowUp"?1:-1).then(d=>{if(d)jumpTo(d);});
+      return;
+    }
+    if(e.key==="Enter"){
+      e.preventDefault();
+      const v=readDateBoxes();
+      if(v){calClose();el.blur();jumpTo(v);}
+      else{showToast("日期格式不完整");setDateBoxes(dayList[focusIdx]||"");}
+      return;
+    }
+    if(e.key==="Escape"){calClose();setDateBoxes(dayList[focusIdx]||"");el.blur();return;}
+    // 左右鍵在格子邊界時換格
+    if(e.key==="ArrowLeft"&&idx>0&&el.selectionStart===0){e.preventDefault();dsegs[idx-1].focus();}
+    if(e.key==="ArrowRight"&&idx<2&&el.selectionStart===el.value.length){e.preventDefault();dsegs[idx+1].focus();}
+    if(e.key==="Backspace"&&idx>0&&!el.value){e.preventDefault();dsegs[idx-1].focus();}
+  });
+});
 
 document.getElementById("ns").addEventListener("click",()=>{
   const day=dayCache.get(dayList[focusIdx]);if(day)day.notes=document.getElementById("nt").value;
@@ -3283,7 +3352,7 @@ document.getElementById("ns").addEventListener("click",()=>{
 });
 document.getElementById("ned").addEventListener("click",e=>{if(e.target===document.getElementById("ned"))document.getElementById("ned").classList.remove("show");});
 
-document.addEventListener("keydown",e=>{if(document.getElementById("ned").classList.contains("show")||document.activeElement===di)return;
+document.addEventListener("keydown",e=>{if(document.getElementById("ned").classList.contains("show")||dateBoxFocused())return;
 if(e.key==="ArrowLeft")document.getElementById("bp").click();
 if(e.key==="ArrowRight")document.getElementById("bn").click();
 if(e.key==="+"||e.key==="=")doZoom(ZS);if(e.key==="-")doZoom(-ZS);});
