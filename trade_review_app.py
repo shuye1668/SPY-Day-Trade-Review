@@ -968,7 +968,11 @@ canvas{display:block;width:100%;height:100%}
       border-radius:0 3px 3px 0;padding:5px 9px;font-size:13px;cursor:pointer;line-height:1.2}
 #dtog:hover{background:#2E343D;color:#FFF}
 
-#dcal{display:none;position:absolute;top:100%;left:0;margin-top:4px;z-index:60;
+/* position:fixed 且掛在 <body> 底下 —— 不能放進 #tb 裡面。
+   #tb 有 overflow-y:hidden（為了讓工具列在窄視窗橫向捲動），
+   任何絕對定位的彈出層只要是它的子孫，超出工具列高度的部分就會被整個裁掉，
+   結果是「日曆有開，但完全看不見」。 */
+#dcal{display:none;position:fixed;z-index:200;
       background:#12151A;border:1px solid #3D434E;border-radius:5px;padding:8px;
       box-shadow:0 8px 24px rgba(0,0,0,.65);user-select:none}
 #dcal.show{display:block}
@@ -998,7 +1002,7 @@ canvas{display:block;width:100%;height:100%}
 <div id="hdr"><span class="tk">SPY US Equity</span><span class="hint">拖曳平移（跨日無縫）｜ 滾輪/+- 縮放 ｜ ← → 切日期 ｜ 雙擊文字框編輯 ｜ 底部/右側邊緣拖曳可縮放軸</span><span id="syncbadge" style="display:none"></span><span class="lbl">Intraday Candle Chart</span></div>
 <div id="tb">
 <button id="bp" title="前一個交易日（← 鍵）">&#8592; Prev</button>
-<span id="dwrap" title="可直接輸入數字；↑↓ 切換前後交易日；點日曆圖示選日期"><span id="dbox"><input class="dseg" id="dY" maxlength="4" inputmode="numeric" autocomplete="off" spellcheck="false"><span class="dsep">-</span><input class="dseg" id="dM" maxlength="2" inputmode="numeric" autocomplete="off" spellcheck="false"><span class="dsep">-</span><input class="dseg" id="dD" maxlength="2" inputmode="numeric" autocomplete="off" spellcheck="false"></span><button id="dtog" title="開啟日曆">&#128197;</button><div id="dcal"></div></span>
+<span id="dwrap" title="可直接輸入數字；↑↓ 切換前後交易日；點日曆圖示選日期"><span id="dbox"><input class="dseg" id="dY" maxlength="4" inputmode="numeric" autocomplete="off" spellcheck="false"><span class="dsep">-</span><input class="dseg" id="dM" maxlength="2" inputmode="numeric" autocomplete="off" spellcheck="false"><span class="dsep">-</span><input class="dseg" id="dD" maxlength="2" inputmode="numeric" autocomplete="off" spellcheck="false"></span><button id="dtog" title="開啟日曆">&#128197;</button></span>
 <button id="bn" title="後一個交易日（→ 鍵）">Next &#8594;</button>
 <button id="bt" title="跳到最新美股交易日">Today</button>
 <span class="pnl" id="dp">---</span><span class="tc" id="dtc"></span>
@@ -1009,6 +1013,7 @@ canvas{display:block;width:100%;height:100%}
 </div>
 <div id="cc"><canvas id="cv"></canvas><div id="nb"></div><div id="ld">載入中 ...</div></div>
 <div id="tb2"></div>
+<div id="dcal"></div>
 <div id="ned"><div class="pn"><h3 id="ned-title">市場概述</h3><textarea id="nt"></textarea><button id="ns">儲存</button></div></div>
 <script>
 const cv=document.getElementById("cv"),ctx=cv.getContext("2d"),cc=document.getElementById("cc");
@@ -3295,8 +3300,21 @@ function calRender(){
 function calOpen(){
   const cur=dayList[focusIdx]||"";
   if(cur){calY=+cur.slice(0,4);calM=+cur.slice(5,7);}
-  calRender();dcal.classList.add("show");
+  calRender();
+  dcal.classList.add("show");
+  calPosition();
 }
+// #dcal 是 position:fixed 掛在 body（見 CSS 的說明），所以要自己算位置：
+// 對齊日期輸入框左緣、貼在它下方；靠近視窗邊界時往內收，避免被切掉。
+function calPosition(){
+  const b=dbox.getBoundingClientRect(),r=dcal.getBoundingClientRect();
+  let left=b.left, top=b.bottom+4;
+  if(left+r.width>innerWidth-8)left=Math.max(8,innerWidth-r.width-8);
+  if(top+r.height>innerHeight-8)top=Math.max(8,b.top-r.height-4);   // 下方放不下就翻到上方
+  dcal.style.left=left+"px";
+  dcal.style.top=top+"px";
+}
+window.addEventListener("resize",()=>{if(dcal.classList.contains("show"))calPosition();});
 function calClose(){dcal.classList.remove("show");}
 
 dtog.addEventListener("click",e=>{e.stopPropagation();
