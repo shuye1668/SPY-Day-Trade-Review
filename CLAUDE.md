@@ -1,9 +1,13 @@
 # Spy daytrade auto csv — 每日寫入 SOP（權威版）
 
 本檔為「Spy daytrade auto csv」routine 的唯一權威定義。每日流程必須完全遵循本檔，
-不得憑記憶重新發明寫法。輸入來源：使用者提供當日券商 Account Statement
-（CSV 匯出或截圖 OCR），Cash Balance 區段含欄位：
-`DATE, TIME, TYPE, REF #, DESCRIPTION, Misc Fees, Commissions & Fees, AMOUNT, BALANCE`。
+不得憑記憶重新發明寫法。輸入來源：當日券商 Account Statement，
+Cash Balance 區段含欄位（**9 欄與 TOS 原生 10 欄皆可，引擎依欄名對應**）：
+`DATE, TIME, TYPE, REF #, DESCRIPTION, Misc Fees, Commissions & Fees, AMOUNT, BALANCE`
+或 `Trade Date, Exec Date, Exec Time, Type, Ref #, Description, ..., Amount, Balance`。
+
+**2026-08-10 起改為雙機運作**：對帳單不再由使用者手動提供，而是由 Boss PC
+（交易機）採集後經 GitHub private repo 同步過來。見下方〈§〇 雙機架構〉。
 
 ## 鐵則（違反任一條即停止並回報，不得自行變通）
 
@@ -21,6 +25,17 @@ AI 之後的角色＝檢查／修正／維護；AI 不可用時人工照《操�
   cell-identical 回歸（與人工核對逐格相同）、對漏單/留倉/BALANCE 對不上做過負向測試會正確 abort。
   自動備份、寫後 §四 全核驗、失敗自動還原；任何 `⚠️需人工確認` 一律不寫入。
 先 dry-run 全綠才 `--commit`。詳見 `SKILL.md`、`MIGRATION.md`。舊每日腳本一律停用。**
+
+**【雙機分工，2026-08-10】兩段式架構現在跑在兩台機器上，各自只寫自己的檔，
+寫錯邊會製造出永遠推不出去、還會卡住對方 git pull 的本機改動：
+- **Boss PC（交易機）只做第一段**：對帳單 → `trades_all.xlsx`，
+  一律用 `spy_daytrade_writer.py <csv> --commit --trades-only`。
+  **絕不可寫 `CS交易紀錄.xlsx` / `offset_state.json` / `notes/`。**
+- **502 只做第二段**：`trades_all.xlsx` → `CS交易紀錄.xlsx`，用 `cs_from_trades.py`。
+  **不主動改 `trades_all.xlsx` / `_inbox/`**（那是 Boss 的產物；App 的配對回寫除外，
+  同步時會被丟棄重取）。
+`--trades-only` 保留 `gate()` 全部安全閘門（§1b BALANCE、留倉、非交易現金、
+needs_review），一條都沒放寬。詳見 §〇。**
 
 0. **【最高優先，2026-07-15】本 routine 無人看管自動跑（每交易日 06:47）。凡遇任何「停下問使用者」情境（offset 對不上、Cash Balance 不完整無法校正、留倉/平倉致 offset 跳動、Day Header B 無法確定），一律把該儲存格填 `⚠️需人工確認`、對話首行加 `🔴 今日 N 處需人工確認`、受牽連下游（餘額鏈／合計／核驗／SUMIF／累積損益check）留空；絕不為了跑完流程而靜默寫入估算／推算／猜值。這是 2026-07 多筆 silent 錯誤的共同根因。詳見 SKILL.md §0。**
 
@@ -41,6 +56,87 @@ AI 之後的角色＝檢查／修正／維護；AI 不可用時人工照《操�
    ```
 3. **寫入前先備份** `CS交易紀錄.xlsx` 與 `trades_all.xlsx` 為 `*_backup_YYYYMMDD.xlsx`。
 4. **寫入後必須通過本檔末尾的全部核驗**才算完成；任一失敗即還原備份並回報。
+
+## 〇、雙機架構與同步（2026-08-10 起）
+
+```
+Boss PC（交易機，C:\TradeReview）              502（D:\fileserver_D\TradeReview）
+────────────────────────────────              ──────────────────────────────────
+TOS → 採集（CSV 匯出為主／OCR 備援）
+  ├─ engine 乾跑（§1b BALANCE 閘門）
+  ├─ writer --trades-only → trades_all.xlsx     ← 第一段結束
+  ├─ write_sync_state.py（新鮮度戳記）
+  ├─ Gmail 草稿（保留為退路）
+  └─ sync_push -Owner boss ─→ GitHub(private) ─→ sync_pull -Owner p502
+                                                   ├─ cs_from_trades.py --from-statement
+                                                   │    （期初/收盤餘額自動帶入）
+                                                   ├─ CS交易紀錄.xlsx ← 人工修正在這
+                                                   └─ sync_push -Owner p502
+```
+
+### 檔案所有權（這是同步不衝突的關鍵）
+
+xlsx 是 binary，git 無法 merge；兩台若改同一個 .xlsx 就是死結。分區之後
+兩邊改的檔案不重疊，`pull --rebase` 永遠不需要人工解衝突。
+
+| 檔案 | 擁有者 | 另一台 |
+|---|---|---|
+| `_inbox/*.csv`（原始對帳單） | Boss | 只讀 |
+| `trades_all.xlsx` | Boss | 只讀 |
+| `sync_state.json` | Boss | 只讀 |
+| `CS交易紀錄.xlsx`、`CS交易紀錄_dump.txt` | **502** | Boss 只讀 |
+| `offset_state.json` | **502** | Boss 只讀 |
+| `notes/` | **502** | Boss 只讀 |
+| `*.py` `*.md` `*.bat` `*.ps1`（程式碼） | **502** | Boss 靠 pull 取得 |
+| `history_minute.xlsx` | 各機獨立，**不進 git** | 4.3MB，每天被 app 追加 |
+
+`sync_pull.ps1 -Owner <boss|p502>` 會先丟棄本機對「對方所有物」的改動再 pull，
+所以誤寫也能自動清乾淨、不會卡住。
+
+### 同步指令
+
+```powershell
+powershell -ExecutionPolicy Bypass -File sync_pull.ps1 -Owner p502   # 取得 Boss 產出
+powershell -ExecutionPolicy Bypass -File sync_push.ps1 -Owner p502   # 推出 CS/notes/程式碼
+```
+
+⚠️ **禁止 `git add -A`** —— 一律用 `sync_push.ps1`，它只 stage 該台擁有的檔。
+
+### 三個容易踩的環境陷阱（都已在腳本內處理，改動時勿破壞）
+
+1. **Boss PC 的 ExecutionPolicy 全 scope 為 Undefined（實際 = Restricted）**，
+   直接跑 `.ps1` 或 dot-source 會被擋。腳本一律用
+   `powershell -ExecutionPolicy Bypass -File`；需保留函式時在該 process 內先下
+   `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force`。
+2. **PowerShell 5.1 讀沒有 BOM 的 UTF-8 `.ps1` 會當 ANSI**，中文註解會炸掉語法。
+   改過任何 `.ps1` 後跑 `python _fix_ps1_bom.py`。
+3. **`.gitattributes` 把 `*.csv` 設為 `-text`**（不做行尾轉換）。
+   曾因 `text eol=lf` 與 `core.autocrlf=true` 互相拉扯，造成 index 與工作區永遠
+   對不上、每次 `git pull` 都以 "You have unstaged changes" 失敗。**不要改回去。**
+
+### 資料新鮮度（防止同步靜默失敗）
+
+Boss 每次跑完寫 `sync_state.json`（最後成功的交易日 + 狀態），隨 git 同步；
+App 標頭顯示「資料截至 X」。判準是**落後幾個美股交易日**，不是幾小時 ——
+Boss PC 週末關機，週五的帳常等週一較晚才補，用時數判斷會每週誤報一次。
+
+| 狀態 | 意義 |
+|---|---|
+| 灰「資料截至 X」 | 正常 |
+| 琥珀「⚠待補前一交易日」 | 落後 1 日。週一早上出現是正常待處理，不是故障 |
+| 琥珀「⚠需人工確認」 | Boss 的 gate 擋下了某日，需依 §0 人工處理 |
+| 紅「✕落後 N 個交易日」(N≥2) | 真的有事沒跑成 |
+| 紅「✕採集失敗」 | Boss 採集階段就失敗了，看 Gmail 草稿的失敗原因 |
+
+### 相關文件
+
+| 檔案 | 內容 |
+|---|---|
+| `BOSS_CLAUDE.md` | Boss PC 採集 routine 完整版（要複製到 `C:\TradeReview_Boss\CLAUDE.md`） |
+| `SETUP_BOSS_PC.md` | Boss PC 建置與每日流程 |
+| `_BossPC_安裝包/` | 帶去 Boss PC 的檔案（含無法走 git 的 `history_minute.xlsx`） |
+
+---
 
 ## 一、trades_all.xlsx（append）
 
@@ -105,3 +201,21 @@ C=`'=C{上一列}+B{本列}'`。
   並會在分析後把整表 write-back（字串化）。routine 只負責 append，不要動舊列。
 - App 不讀寫 CS交易紀錄.xlsx，CS 格式問題與 App 無關。
 - 寫入時确保兩個 xlsx 沒有在 Excel 中開啟（檢查 `~$` 鎖定檔）。
+
+### 寫入互斥（2026-08-10 補強，勿移除）
+
+App 是 pythonw 常駐、每 4 秒偵測 mtime，而它的 write-back 會重寫**整張**
+trades_all。`to_excel()` 是就地寫入，中途被另一個程序介入留下的是**不可讀的
+截斷 zip**，不是舊資料 —— 2026-08-10 就是這樣把 `history_minute.xlsx`
+（4.4MB）寫壞的：當時同時有兩個 app 實例在跑。三道防護：
+
+1. **`.writer.lock`** — `spy_daytrade_writer.py` 寫入期間持鎖，App 見鎖即跳過
+   write-back；鎖逾時 600 秒視為殘留（避免 writer 被中斷後 App 永遠不再回寫）。
+2. **`_atomic_to_excel()`** — 先寫完整暫存檔再 `os.replace()`（同磁碟區為原子操作），
+   讀取端永遠只會看到完整檔案。`history_minute.xlsx` 與 `trades_all.xlsx` 皆適用。
+3. **`_file_lock()`** — O_EXCL 鎖檔，擋第二個 app 實例同時重寫。
+   「工作排程常駐 + 手動再開一個」在這裡是常態，不是異常。
+
+⚠️ `history_minute.xlsx` **沒有備份來源**：yfinance 的 1 分鐘資料只回得了最近
+約 30 天，Bloomberg 的 IntradayBarRequest 也回不了一年多前 —— 且它刻意不進 git。
+請另外保留備份。
