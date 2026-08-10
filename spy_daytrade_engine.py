@@ -137,29 +137,83 @@ class Session:
 # 解析 statement
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Cash Balance 表頭有兩種版本，欄數不同：
+#   9 欄（AI 轉錄／OCR 產出）：DATE,TIME,TYPE,REF #,DESCRIPTION,Misc Fees,
+#                              Commissions & Fees,AMOUNT,BALANCE
+#   10 欄（TOS 直接匯出）    ：Trade Date,Exec Date,Exec Time,Type,Ref #,
+#                              Description,Misc Fees,Commissions & Fees,Amount,Balance
+# 以前只認 9 欄，TOS 原生匯出檔一律被拒（"Statement 格式不符"）。
+# 改成依欄名對應，兩種都吃。
+#
+# ⚠️ 日期欄一定要取 Exec Date，不是 Trade Date。Trade Date 是券商的「營業日」，
+# 午夜之後成交的列會掛在前一個營業日（實測 2026-07-29-raw.csv 有 5 列
+# Trade Date=7/27 但 Exec Date=7/28 01:18）。取錯會整整差一天 ——
+# 這正是《人工SOP》第 2 節警告過的陷阱。
+_COL_ALIASES = {
+    "date":    ("date", "exec date", "trade date"),   # 順序即優先序
+    "time":    ("time", "exec time"),
+    "type":    ("type",),
+    "ref":     ("ref #", "ref#", "ref"),
+    "desc":    ("description", "desc"),
+    "misc":    ("misc fees", "misc fee"),
+    "comm":    ("commissions & fees", "commissions and fees", "comm & fees"),
+    "amount":  ("amount",),
+    "balance": ("balance",),
+}
+_REQUIRED_COLS = ("date", "time", "type", "desc", "amount", "balance")
+
+
+def _map_header(cells):
+    """把表頭列對應成 {欄位: index}；不是表頭就回 None。"""
+    norm = [c.strip().strip('"').lower() for c in cells]
+    idx = {}
+    for key, aliases in _COL_ALIASES.items():
+        for alias in aliases:            # 依優先序，先命中的贏
+            if alias in norm:
+                idx[key] = norm.index(alias)
+                break
+    if all(k in idx for k in _REQUIRED_COLS):
+        return idx
+    return None
+
+
 def parse_statement(text):
     """回傳 [Fill,...]（僅 Cash Balance 區段）。"""
-    # 找到 Cash Balance 表頭
     lines = text.splitlines()
     start = None
+    colmap = None
     for i, ln in enumerate(lines):
-        if ln.strip().upper().startswith("DATE,TIME,TYPE,REF"):
-            start = i
+        if not ln.strip():
+            continue
+        try:
+            cells = next(csv.reader(io.StringIO(ln)))
+        except Exception:
+            continue
+        m = _map_header(cells)
+        if m:
+            start, colmap = i, m
             break
     if start is None:
-        raise ValueError("找不到 Cash Balance 表頭（DATE,TIME,TYPE,REF #,...）— Statement 格式不符")
+        raise ValueError(
+            "找不到 Cash Balance 表頭 — Statement 格式不符。"
+            "可接受 9 欄（DATE,TIME,TYPE,REF #,...）或 10 欄"
+            "（Trade Date,Exec Date,Exec Time,Type,Ref #,...）")
 
     body = "\n".join(lines[start:])
     reader = csv.reader(io.StringIO(body))
     header = next(reader)
+    ncol = max(colmap.values()) + 1
     fills = []
     for row in reader:
         if not row or all(c.strip() == "" for c in row):
             continue
-        if len(row) < 9:
-            # 可能是被截斷/OCR 破碎列 → 不靜默跳過，標記
-            row = row + [""] * (9 - len(row))
-        date_s, time_s, typ, ref, desc, misc, comm, amount, balance = row[:9]
+        if len(row) < ncol:
+            # 可能是被截斷/OCR 破碎列 → 補空白，後續驗算會抓出來，不靜默跳過
+            row = row + [""] * (ncol - len(row))
+        g = lambda k: row[colmap[k]] if k in colmap else ""
+        date_s, time_s, typ, ref = g("date"), g("time"), g("type"), g("ref")
+        desc, misc, comm = g("desc"), g("misc"), g("comm")
+        amount, balance = g("amount"), g("balance")
         # Cash Balance 區段結束偵測：DATE 欄不是 m/d/yy 日期 → 進入下一張表，停止
         if not re.match(r"^\s*\d{1,2}/\d{1,2}/\d{2,4}\s*$", date_s or ""):
             break
