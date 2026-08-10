@@ -63,11 +63,25 @@ if (-not (Test-Path $AppPath)) { throw "找不到 app：$AppPath" }
 # ── 註冊 ───────────────────────────────────────────────────────────
 # 路徑可能含空白（例如 "C:\Users\TS USER\..."），Argument 一定要自帶引號
 $A = New-ScheduledTaskAction -Execute $PythonW -Argument "`"$AppPath`"" -WorkingDirectory $root
-$T = New-ScheduledTaskTrigger -AtLogOn
+
+# 兩個觸發器 + 看門狗重複：
+#   AtLogOn         登入就起
+#   Once + Repetition  每 10 分鐘再觸發一次，永不結束
+# 搭配 MultipleInstances=IgnoreNew，重複觸發等於零成本的健康檢查：
+#   還活著 → 新實例被忽略（不會開第二個，也就不會有兩個 app 同時重寫 xlsx）
+#   已死掉 → 直接被拉起來
+# 沒有這個的話，app 崩潰後要等到下次登入才會回來。
+$T1 = New-ScheduledTaskTrigger -AtLogOn
+$T2 = New-ScheduledTaskTrigger -Once -At (Get-Date).Date `
+        -RepetitionInterval (New-TimeSpan -Minutes 10)
+
 $P = New-ScheduledTaskPrincipal -UserId ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) `
                                 -LogonType Interactive -RunLevel Limited
+# RestartCount/Interval：處理「行程異常結束」；看門狗處理「行程不見了」
 $S = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit 0 `
-                                  -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+                                  -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+                                  -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+$T = @($T1, $T2)
 
 Register-ScheduledTask -TaskName $TaskName -Action $A -Trigger $T `
                        -Principal $P -Settings $S -Force | Out-Null
@@ -80,9 +94,11 @@ Write-Host ("       Exec     : " + $t.Actions[0].Execute)
 Write-Host ("       Args     : " + $t.Actions[0].Arguments)
 Write-Host ("       WorkDir  : " + $t.Actions[0].WorkingDirectory)
 Write-Host ("       User     : " + $t.Principal.UserId)
-Write-Host ("       Trigger  : " + $t.Triggers[0].CimClass.CimClassName)
+Write-Host ("       Trigger  : " + (($t.Triggers | ForEach-Object { $_.CimClass.CimClassName }) -join ', '))
+Write-Host ("       看門狗   : 每 " + $t.Triggers[1].Repetition.Interval + " 檢查一次（IgnoreNew → 活著就忽略，死了就拉起）")
 Write-Host ("       TimeLimit: " + $t.Settings.ExecutionTimeLimit + "  (應為空白/PT0S = 不限時)")
-Write-Host ("       MultiInst: " + $t.Settings.MultipleInstances)
+Write-Host ("       MultiInst: " + $t.Settings.MultipleInstances + "  (必須是 IgnoreNew，否則會開出多個實例寫壞 xlsx)")
+Write-Host ("       失敗重啟 : " + $t.Settings.RestartCount + " 次，間隔 " + $t.Settings.RestartInterval)
 Write-Host ""
 Write-Host "  馬上測試（不必重開機）：" -ForegroundColor Cyan
 Write-Host "      Start-ScheduledTask -TaskName $TaskName"

@@ -3183,16 +3183,32 @@ if __name__=="__main__":
     print(f"\n  Trade Review Web App v3\n  Root:    {ROOT_FOLDER}\n  Trades:  {TRADES_FILE}\n  History: {HISTORY_FILE}\n  Notes:   {NOTES_FOLDER}\n  http://localhost:{PORT}\n")
     if not os.path.exists(ROOT_FOLDER):os.makedirs(ROOT_FOLDER,exist_ok=True)
     if not os.path.exists(NOTES_FOLDER):os.makedirs(NOTES_FOLDER,exist_ok=True)
-    # Pre-load history file so first API request is fast
+    # 以下兩段只是「暖身快取」，讓第一個請求快一點。它們絕不能擋住伺服器啟動：
+    # 這個 app 的核心價值是「隨時打得開、看得到過往所有 K 線」，而 K 線來自
+    # history_minute.xlsx，跟帳本完全無關。就算 trades_all 壞掉、還沒寫入當日
+    # 交易、或分析邏輯出例外，圖表都還是該看得到。
+    # （pythonw 沒有主控台，這裡若拋例外只會靜默不啟動 —— 最難察覺的失敗。）
     if os.path.exists(HISTORY_FILE):
         print("  Loading history file (may take a moment for large files)...")
-        hist = _load_history_by_date()
-        print(f"  [OK] {len(hist)} trading days ready")
-    # Pre-run trade analysis
+        try:
+            hist = _load_history_by_date()
+            print(f"  [OK] {len(hist)} trading days ready")
+        except Exception as e:
+            print(f"  ⚠ history 預載失敗（不影響啟動，改為每次請求時再讀）：{type(e).__name__}: {e}")
     print("  Analysing trades...")
-    _analyse_all_trades()
-    print("  [OK] Trade analysis complete")
+    try:
+        _analyse_all_trades()
+        print("  [OK] Trade analysis complete")
+    except Exception as e:
+        print(f"  ⚠ 交易分析預載失敗（不影響啟動，K 線仍可正常瀏覽）：{type(e).__name__}: {e}")
     if not os.path.exists(TRADES_FILE):
         print(f"  ⚠ {TRADES_FILE} not found. Create it with columns:")
         print(f"     Date | Exec Time(EDT) | Symbol | Price | Type | 損益(AI辨識) | Shares")
-    app.run(host="0.0.0.0",port=PORT,debug=False)
+    try:
+        app.run(host="0.0.0.0",port=PORT,debug=False)
+    except OSError as e:
+        # 幾乎都是 port 被占用。pythonw 下這行會落在 _logs\trade_review_app.log，
+        # 是排查「排程說在跑、網頁卻打不開」的唯一線索。
+        print(f"  🔴 無法在 port {PORT} 啟動：{e}")
+        print(f"     檢查誰占用了：Get-NetTCPConnection -LocalPort {PORT} -State Listen")
+        raise
