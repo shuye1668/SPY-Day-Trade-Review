@@ -751,13 +751,24 @@ def _add_no_cache(resp):
     resp.headers["Expires"]="0"
     return resp
 
+SYNC_STATE_FILE=_os.path.join(ROOT_FOLDER,"sync_state.json")
+
 @app.route("/api/version")
 def api_version():
-    """Return data-file mtimes so the client can auto-detect edits and reload."""
+    """Return data-file mtimes so the client can auto-detect edits and reload.
+
+    Also returns sync freshness: Boss PC writes sync_state.json after each run and
+    it travels with the git sync. Without this, a failed push looks exactly like
+    "market hasn't opened yet" — the UI must be able to tell those apart (CLAUDE §0).
+    """
     def _mt(p):
         try:return os.path.getmtime(p)
         except:return 0
-    return jsonify({"trades":_mt(TRADES_FILE)})
+    sync=None
+    try:
+        with open(SYNC_STATE_FILE,encoding="utf-8") as f:sync=json.load(f)
+    except Exception:pass
+    return jsonify({"trades":_mt(TRADES_FILE),"sync":sync})
 
 @app.route("/")
 def index():return HTML
@@ -866,8 +877,9 @@ canvas{display:block;width:100%;height:100%}
    and at ~1.5:1 contrast was effectively invisible. Now it lives in the header
    strip, which has spare room, at a legible grey. */
 .hint{margin-left:20px;color:#6B7280;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#syncbadge{margin-left:auto;margin-right:14px;font-size:11px;font-weight:bold;white-space:nowrap;cursor:default}
 </style></head><body>
-<div id="hdr"><span class="tk">SPY US Equity</span><span class="hint">拖曳平移（跨日無縫）｜ 滾輪/+- 縮放 ｜ ← → 切日期 ｜ 雙擊文字框編輯 ｜ 底部/右側邊緣拖曳可縮放軸</span><span class="lbl">Intraday Candle Chart</span></div>
+<div id="hdr"><span class="tk">SPY US Equity</span><span class="hint">拖曳平移（跨日無縫）｜ 滾輪/+- 縮放 ｜ ← → 切日期 ｜ 雙擊文字框編輯 ｜ 底部/右側邊緣拖曳可縮放軸</span><span id="syncbadge" style="display:none"></span><span class="lbl">Intraday Candle Chart</span></div>
 <div id="tb">
 <button id="bp">&#8592; Prev</button>
 <input type="text" id="di" value="---" spellcheck="false">
@@ -3008,16 +3020,38 @@ async function refreshData(){
 }
 let _dataVer=null,_verBusy=false;
 async function seedDataVersion(){
-  try{const r=await fetch("/api/version",{cache:"no-store"});_dataVer=(await r.json()).trades;}catch(e){}
+  try{const r=await fetch("/api/version",{cache:"no-store"});const j=await r.json();
+    _dataVer=j.trades;renderSyncBadge(j.sync);}catch(e){}
 }
 async function checkDataVersion(){
   if(_verBusy||_exporting||exportMode)return;  // never yank data out from under an export
   _verBusy=true;
   try{
-    const r=await fetch("/api/version",{cache:"no-store"});const v=(await r.json()).trades;
+    const r=await fetch("/api/version",{cache:"no-store"});const j=await r.json();const v=j.trades;
+    renderSyncBadge(j.sync);
     if(_dataVer===null){_dataVer=v;}
     else if(v!==_dataVer){_dataVer=v;await refreshData();showToast("資料已更新");}
   }catch(e){}finally{_verBusy=false;}
+}
+
+// 同步新鮮度：Boss PC 每次跑完寫 sync_state.json，隨 git 一起同步過來。
+// 少了這個，push 失敗與「今天還沒開盤」在畫面上長得一模一樣。
+function renderSyncBadge(s){
+  const el=document.getElementById("syncbadge");
+  if(!el)return;
+  if(!s||!s.updated_utc){el.style.display="none";return;}
+  el.style.display="";
+  const ageH=(Date.now()-Date.parse(s.updated_utc))/3600000;
+  let color="#6B7280",txt=`資料截至 ${s.last_trade_date||"?"}`;
+  if(s.status==="blocked"){color="#E0A800";txt+=" ⚠需人工確認";}
+  else if(s.status==="failed"){color="#FF4444";txt+=" ✕採集失敗";}
+  // 交易日隔天早上就該有新資料；超過 30 小時沒更新代表同步或採集出事了
+  else if(ageH>30){color="#FF4444";txt+=` ✕已 ${Math.floor(ageH)}h 未更新`;}
+  else if(ageH>18){color="#E0A800";txt+=` ⚠已 ${Math.floor(ageH)}h 未更新`;}
+  el.style.color=color;
+  el.textContent=txt;
+  el.title=`status=${s.status||"?"}  host=${s.host||"?"}  updated=${s.updated_utc}`
+           +(s.note?`\n${s.note}`:"");
 }
 setInterval(checkDataVersion,4000);                 // poll every 4s
 window.addEventListener("focus",checkDataVersion);  // and instantly when returning to the tab
