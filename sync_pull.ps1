@@ -12,7 +12,10 @@
   exit 0=完成  1=失敗  2=有本機未推送的改動而跳過
 #>
 [CmdletBinding()]
-param([switch]$Quiet)
+param(
+    [ValidateSet('boss', 'p502')][string]$Owner = 'p502',
+    [switch]$Quiet
+)
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -24,11 +27,17 @@ $log = Join-Path $root '_logs\sync_pull.log'
 New-Item -ItemType Directory -Force -Path (Split-Path $log) | Out-Null
 function Log($m) { "$(Get-Date -f 'yyyy-MM-dd HH:mm:ss')  $m" | Add-Content $log -Encoding utf8 }
 
-# Boss PC 擁有的檔案：本地任何改動都不具權威性，一律丟棄
-$bossOwned = @('trades_all.xlsx', 'sync_state.json', '_inbox')
+# 丟棄「對方所有物」的本地改動 —— 那些改動不具權威性。
+# 對稱處理很重要：Boss 若誤跑了完整 writer（會寫 CS/offset_state），
+# 那些改動不會被 -Owner boss 推出去，就會永遠卡住 Boss 的 pull。
+if ($Owner -eq 'p502') {
+    $foreign = @('trades_all.xlsx', 'sync_state.json', '_inbox')
+} else {
+    $foreign = @('CS交易紀錄.xlsx', 'CS交易紀錄_dump.txt', 'offset_state.json', 'notes')
+}
 
 try {
-    foreach ($p in $bossOwned) {
+    foreach ($p in $foreign) {
         if (Test-Path $p) { Try-Git checkout -- $p | Out-Null }
     }
 
@@ -37,8 +46,8 @@ try {
     if ($dirty) {
         $names = (($dirty | ForEach-Object { $_.ToString().Substring(3) }) -join ', ')
         Say "  [!] 有未提交的本機改動，跳過 pull：$names"
-        Say "      這些是 502 自己的檔（notes / CS / 程式碼）"
-        Say "      → 請先執行： .\sync_push.ps1 -Owner p502"
+        Say "      這些是本機自己的檔"
+        Say "      → 請先執行： .\sync_push.ps1 -Owner $Owner"
         Log "SKIP dirty: $names"
         exit 2
     }
