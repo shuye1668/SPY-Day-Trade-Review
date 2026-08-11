@@ -4,13 +4,14 @@
   ⚠️ 需以「系統管理員」執行
 
       powershell -ExecutionPolicy Bypass -File setup_sync_push_task.ps1
-      powershell -ExecutionPolicy Bypass -File setup_sync_push_task.ps1 -At 12:00
+      powershell -ExecutionPolicy Bypass -File setup_sync_push_task.ps1 -At 10:00,12:00,18:00
 
-  每天中午把 502 擁有的檔案推上 GitHub：
+  每天把 502 擁有的檔案推上 GitHub：
       CS交易紀錄.xlsx / CS交易紀錄_dump.txt / offset_state.json / notes\ / 程式碼
 
-  為什麼排 12:00：做帳與人工修正通常在早上完成，中午推一次剛好涵蓋當天成果。
-  下午之後才改的東西會等到隔天中午 —— 想立刻推就手動跑：
+  預設 10:00 與 12:00 兩次：做帳與人工修正多在早上完成，10 點先推一次當天成果，
+  12 點再補一次（涵蓋 10 點後才改的）。沒有變更時會直接跳過，多跑不會有副作用。
+  之後才改的東西會等到隔天 —— 想立刻推就手動跑：
       powershell -ExecutionPolicy Bypass -File sync_push.ps1 -Owner p502
 
   注意：這支只推「502 的所有物」。Boss 的產物（trades_all / _inbox /
@@ -18,7 +19,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$At = '12:00',
+    [string[]]$At = @('10:00', '12:00'),
     [string]$TaskName = 'TradeReview_SyncPush_p502'
 )
 
@@ -42,7 +43,8 @@ $argline = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden ' +
            '-File "' + $script + '" -Owner p502 -Quiet'
 
 $A = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $argline -WorkingDirectory $root
-$T = New-ScheduledTaskTrigger -Daily -At $At
+# 多個時間點＝同一個任務掛多個每日觸發器，不必開好幾個任務
+$T = @($At | ForEach-Object { New-ScheduledTaskTrigger -Daily -At $_ })
 $P = New-ScheduledTaskPrincipal -UserId ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) `
         -LogonType Interactive -RunLevel Limited
 # StartWhenAvailable：中午電腦沒開的話，開機後補跑（否則整天就漏掉了）
@@ -57,7 +59,9 @@ Register-ScheduledTask -TaskName $TaskName -Action $A -Trigger $T `
 $t = Get-ScheduledTask -TaskName $TaskName
 Write-Host ""
 Write-Host "  [OK] 已註冊：$TaskName" -ForegroundColor Green
-Write-Host ("       每天 " + $At + " 執行；電腦當時沒開會在開機後補跑")
+Write-Host ("       每天 " + ($At -join '、') + " 各執行一次；電腦當時沒開會在開機後補跑")
+Write-Host ("       觸發器 : " + (($t.Triggers | ForEach-Object {
+                ([datetime]$_.StartBoundary).ToString('HH:mm') }) -join '、'))
 Write-Host ("       Exec : " + $t.Actions[0].Execute)
 Write-Host ("       Args : " + $t.Actions[0].Arguments)
 Write-Host ("       Log  : " + (Join-Path $root '_logs\sync_push.log'))
