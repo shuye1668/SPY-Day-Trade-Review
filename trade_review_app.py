@@ -3386,6 +3386,84 @@ initIndButtons();
 init().then(gotoDateFromHash);
 </script></body></html>"""
 
+# ── 主動補 K 線（背景執行緒，2026-08-19）────────────────────────────────
+# 為什麼需要：_append_to_history 只由 fetch_intraday 呼叫，而 fetch_intraday 只在
+# /api/data（使用者點開某天）時才跑。沒有交易的日子不在 trades_all 裡，也還不在
+# history 裡，所以根本不會出現在 /api/dates 清單上 → 點不到 → 永遠不會被補。
+# 死鎖的結果就是「沒交易的日子看不到股價線」。先主動補進 history，那天就會自己
+# 出現在清單上。
+#
+# 刻意放在 app 內部而不是另寫排程腳本：history_minute.xlsx 也被本 app 回寫，
+# 兩個 process 同時重寫這個 4.4MB 活頁簿正是 2026-08-10 把它寫成截斷 zip 的成因。
+# 同一個 process 內走既有的 _file_lock + _atomic_to_excel，沒有跨程序競態。
+REFRESH_LOOKBACK_DAYS = 7        # 往回掃幾個日曆日
+REFRESH_INTERVAL_SEC  = 3600     # 每小時檢查一次
+REFRESH_MAX_ATTEMPTS  = 3        # 同一天連續抓空幾次就放棄（假日不必每小時重試）
+_refresh_attempts = {}
+
+def _et_now():
+    """美東現在時間（naive）。判斷「某天收盤了沒」只需要美東當地時間。"""
+    try:
+        from zoneinfo import ZoneInfo
+        return dt.datetime.now(ZoneInfo("America/New_York")).replace(tzinfo=None)
+    except Exception:
+        # 沒有 tz 資料庫時退回 UTC-4（夏令）。只用於收盤判斷，1 小時誤差無妨。
+        return dt.datetime.utcnow() - dt.timedelta(hours=4)
+
+def _settled_sessions(lookback_days=REFRESH_LOOKBACK_DAYS):
+    """回傳「已經收盤」的美股日期（新到舊）。
+
+    只收已結束的盤：盤中抓只會拿到半天的 bar，而 _append_to_history 見到日期
+    已存在就不再更新 —— 那筆殘缺資料會被永久凍結。所以一律等 16:05 ET 之後才收。
+    """
+    now = _et_now()
+    out = []
+    for i in range(lookback_days):
+        d = (now - dt.timedelta(days=i)).date()
+        if d.weekday() >= 5:            # 週末沒有盤
+            continue
+        if now < dt.datetime.combine(d, dt.time(16, 5)):
+            continue                     # 當天還沒收盤（或還在盤中）
+        out.append(d.strftime("%Y-%m-%d"))
+    return out
+
+def _refresh_recent_candles():
+    """把最近幾個已收盤交易日補進 history_minute.xlsx。回傳實際補進的日期。"""
+    added = []
+    for ds in _settled_sessions():
+        try:
+            hist = _load_history_by_date()
+            if ds in hist and hist[ds]:
+                continue                 # 已經有了
+            if _refresh_attempts.get(ds, 0) >= REFRESH_MAX_ATTEMPTS:
+                continue                 # 多半是假日，別再敲 yfinance
+            # 清掉負快取：常駐 app 下，一次網路抖動就會讓這天在本 process 內
+            # 永遠不再重試。每輪重新給它機會，靠 attempts 上限收斂。
+            _negative_cache.discard(ds)
+            _cache.pop(f"{TICKER}|{ds}", None)
+            bars = fetch_intraday(TICKER, ds)
+            if bars:
+                added.append(f"{ds}({len(bars)}根)")
+                _refresh_attempts.pop(ds, None)
+            else:
+                _refresh_attempts[ds] = _refresh_attempts.get(ds, 0) + 1
+        except Exception as e:
+            _refresh_attempts[ds] = _refresh_attempts.get(ds, 0) + 1
+            print(f"[refresh] {ds} 失敗：{type(e).__name__}: {e}")
+    if added:
+        print(f"[refresh] {dt.datetime.now():%m-%d %H:%M} 已補 K 線：{', '.join(added)}")
+    return added
+
+def _refresh_loop():
+    time.sleep(20)                       # 讓 Flask 先起來，不跟啟動搶 I/O
+    while True:
+        try:
+            _refresh_recent_candles()
+        except Exception as e:
+            print(f"[refresh] 迴圈例外（略過本輪）：{type(e).__name__}: {e}")
+        time.sleep(REFRESH_INTERVAL_SEC)
+
+
 if __name__=="__main__":
     print(f"\n  Trade Review Web App v3\n  Root:    {ROOT_FOLDER}\n  Trades:  {TRADES_FILE}\n  History: {HISTORY_FILE}\n  Notes:   {NOTES_FOLDER}\n  http://localhost:{PORT}\n")
     if not os.path.exists(ROOT_FOLDER):os.makedirs(ROOT_FOLDER,exist_ok=True)
@@ -3411,6 +3489,16 @@ if __name__=="__main__":
     if not os.path.exists(TRADES_FILE):
         print(f"  ⚠ {TRADES_FILE} not found. Create it with columns:")
         print(f"     Date | Exec Time(EDT) | Symbol | Price | Type | 損益(AI辨識) | Shares")
+    # 主動補 K 線：daemon 執行緒，絕不擋啟動、也絕不擋關閉。
+    # 失敗只寫 log，圖表照樣看得到既有資料。
+    try:
+        import threading
+        threading.Thread(target=_refresh_loop, daemon=True,
+                         name="candle-refresher").start()
+        print(f"  [OK] 主動補 K 線已啟動（每 {REFRESH_INTERVAL_SEC//60} 分檢查、"
+              f"回看 {REFRESH_LOOKBACK_DAYS} 日、只收已收盤的盤）")
+    except Exception as e:
+        print(f"  ⚠ 主動補 K 線啟動失敗（不影響瀏覽）：{type(e).__name__}: {e}")
     try:
         app.run(host="0.0.0.0",port=PORT,debug=False)
     except OSError as e:

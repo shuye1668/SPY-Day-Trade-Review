@@ -41,8 +41,14 @@ try {
         if (Test-Path $p) { Try-Git checkout -- $p | Out-Null }
     }
 
-    # 還有殘留改動就停 —— 寧可停下來讓人看到，也不要 pull 失敗卻回報成功
-    $dirty = Invoke-Git status --porcelain
+    # 還有殘留改動就停 —— 寧可停下來讓人看到，也不要 pull 失敗卻回報成功。
+    #
+    # --untracked-files=no 很重要（2026-08-19 補）：未追蹤檔並不會擋 rebase pull，
+    # 但原本的 --porcelain 會把它們一起算成 dirty，於是只要資料夾裡躺著一個沒進
+    # git 的檔（例如 _inbox\2026-08-11.csv、暫存的匯出、別的工具產物），這支就
+    # 每天都 exit 2 跳過 —— 無人看管下等同同步永久停擺，而且完全沒有錯誤訊息。
+    # 只擋「已追蹤檔的本機修改」才是真正會被 pull 覆蓋掉的東西。
+    $dirty = Invoke-Git status --porcelain --untracked-files=no
     if ($dirty) {
         $names = (($dirty | ForEach-Object { $_.ToString().Substring(3) }) -join ', ')
         Say "  [!] 有未提交的本機改動，跳過 pull：$names"
