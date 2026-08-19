@@ -102,6 +102,25 @@ powershell -ExecutionPolicy Bypass -File sync_push.ps1 -Owner p502   # 推出 CS
 
 ⚠️ **禁止 `git add -A`** —— 一律用 `sync_push.ps1`，它只 stage 該台擁有的檔。
 
+### 502 的自動排程（2026-08-19 建立，取代每日手按 .bat）
+
+| 排程 | 時間 | 做什麼 |
+|---|---|---|
+| `TradeReview_Dashboard` | 開機 + 每 10 分看門狗 | pythonw 常駐 app（含下方「主動補 K 線」） |
+| `TradeReview_SyncPull_p502` | 09:30、11:30 | `sync_pull.ps1 -Owner p502` 取回 Boss 的 `trades_all` / `_inbox` |
+| `TradeReview_SyncPush_p502` | 10:00、12:00 | `sync_push.ps1 -Owner p502` 推出 CS 帳／notes／程式碼 |
+
+順序刻意是**先拉再推**（09:30 拉 → 10:00 推 → 11:30 拉 → 12:00 推）。
+`StartWhenAvailable`：當時沒開機會在開機後補跑。
+
+`每日一鍵複盤.bat` **保留為手動退路**（互動式、有 `choice`/`pause`，不能排程）。
+正常情況不需要按它；要按的時機只剩「Boss 沒跑成、要用手邊 CSV 自己補」。
+
+⚠️ **`sync_pull` 的 dirty 閘門只看已追蹤檔**（`--untracked-files=no`）。
+未追蹤檔不會擋 rebase pull，但原本的 `--porcelain` 會把它們也算成 dirty，
+於是資料夾裡只要躺著一個沒進 git 的檔（例如 `_inbox\2026-08-11.csv`），
+就會每天 exit 2 靜默跳過 —— 無人看管下等於同步永久停擺。**不要改回去。**
+
 ### 三個容易踩的環境陷阱（都已在腳本內處理，改動時勿破壞）
 
 1. **Boss PC 的 ExecutionPolicy 全 scope 為 Undefined（實際 = Restricted）**，
@@ -196,6 +215,27 @@ C=`'=C{上一列}+B{本列}'`。
 7. 當日損益與「累積損益check」B 欄一致。
 
 ## 五、Trade Review App 對接注意
+
+### 主動補 K 線（2026-08-19 加，勿移除）
+
+App 內建 `candle-refresher` daemon 執行緒：每 60 分鐘把最近 7 個日曆日中
+**已收盤**的交易日補進 `history_minute.xlsx`。
+
+修的是一個死鎖：`_append_to_history` 只由 `fetch_intraday` 呼叫，而 `fetch_intraday`
+只在 `/api/data`（有人點開某天）時才跑。沒有交易的日子不在 `trades_all` 裡、也還不在
+`history` 裡 → 不會出現在 `/api/dates` 清單 → 點不到 → 永遠不會被補。
+結果就是「沒交易的日子看不到股價線」。先主動補進 history，那天就會自己出現。
+
+三個刻意的設計，改動時勿破壞：
+
+1. **只收已收盤的盤（16:05 ET 之後）**。盤中抓只會拿到半天 bar，而
+   `_append_to_history` 見日期已存在就不再更新 —— 那筆殘缺資料會被**永久凍結**。
+2. **放在 app 內部，不另寫排程腳本**。`history_minute.xlsx` 也被 app 回寫，
+   兩個 process 同時重寫這個 4.4MB 活頁簿正是 2026-08-10 把它寫成截斷 zip 的成因；
+   同一 process 內走既有 `_file_lock` + `_atomic_to_excel`，沒有跨程序競態。
+3. **每輪清掉該日的 `_negative_cache`**，但用 `REFRESH_MAX_ATTEMPTS=3` 收斂。
+   常駐 app 下，一次網路抖動會讓那天在整個 process 生命週期內不再重試；
+   而假日若無上限則會每小時空敲 yfinance。
 
 - `trade_review_app.py` 以 `pd.read_excel(dtype=str)` + `_norm_date` 讀 trades_all，
   並會在分析後把整表 write-back（字串化）。routine 只負責 append，不要動舊列。
