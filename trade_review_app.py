@@ -831,7 +831,12 @@ def api_version():
     try:
         with open(SYNC_STATE_FILE,encoding="utf-8") as f:sync=json.load(f)
     except Exception:pass
-    return jsonify({"trades":_mt(TRADES_FILE),"sync":sync})
+    # K 線新鮮度：交易帳與股價線是兩條獨立的鏈，任一條停掉都必須看得出來。
+    # 2026-09-08 加：9/7 勞動節休市時，使用者無法分辨「正確」與「壞掉」。
+    candles=None
+    try:candles=candle_currency()
+    except Exception as e:candles={"error":f"{type(e).__name__}: {e}"}
+    return jsonify({"trades":_mt(TRADES_FILE),"sync":sync,"candles":candles})
 
 @app.route("/")
 def index():return HTML
@@ -997,9 +1002,10 @@ canvas{display:block;width:100%;height:100%}
 #dcal .cal-ft b{color:#D4D9E0}
 #dlist .di-empty{padding:10px 12px;font-size:12px;color:#7A8290}
 .hint{margin-left:20px;color:#6B7280;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#syncbadge{margin-left:auto;margin-right:14px;font-size:11px;font-weight:bold;white-space:nowrap;cursor:default}
+#cdlbadge{margin-left:auto;margin-right:12px;font-size:11px;font-weight:bold;white-space:nowrap;cursor:default}
+#syncbadge{margin-right:14px;font-size:11px;font-weight:bold;white-space:nowrap;cursor:default}
 </style></head><body>
-<div id="hdr"><span class="tk">SPY US Equity</span><span class="hint">拖曳平移（跨日無縫）｜ 滾輪/+- 縮放 ｜ ← → 切日期 ｜ 雙擊文字框編輯 ｜ 底部/右側邊緣拖曳可縮放軸</span><span id="syncbadge" style="display:none"></span><span class="lbl">Intraday Candle Chart</span></div>
+<div id="hdr"><span class="tk">SPY US Equity</span><span class="hint">拖曳平移（跨日無縫）｜ 滾輪/+- 縮放 ｜ ← → 切日期 ｜ 雙擊文字框編輯 ｜ 底部/右側邊緣拖曳可縮放軸</span><span id="cdlbadge" style="display:none"></span><span id="syncbadge" style="display:none"></span><span class="lbl">Intraday Candle Chart</span></div>
 <div id="tb">
 <button id="bp" title="前一個交易日（← 鍵）">&#8592; Prev</button>
 <span id="dwrap" title="可直接輸入數字；↑↓ 切換前後交易日；點日曆圖示選日期"><span id="dbox"><input class="dseg" id="dY" maxlength="4" inputmode="numeric" autocomplete="off" spellcheck="false"><span class="dsep">-</span><input class="dseg" id="dM" maxlength="2" inputmode="numeric" autocomplete="off" spellcheck="false"><span class="dsep">-</span><input class="dseg" id="dD" maxlength="2" inputmode="numeric" autocomplete="off" spellcheck="false"></span><button id="dtog" title="開啟日曆">&#128197;</button></span>
@@ -3176,14 +3182,14 @@ async function refreshData(){
 let _dataVer=null,_verBusy=false;
 async function seedDataVersion(){
   try{const r=await fetch("/api/version",{cache:"no-store"});const j=await r.json();
-    _dataVer=j.trades;renderSyncBadge(j.sync);}catch(e){}
+    _dataVer=j.trades;renderSyncBadge(j.sync,j.candles);}catch(e){}
 }
 async function checkDataVersion(){
   if(_verBusy||_exporting||exportMode)return;  // never yank data out from under an export
   _verBusy=true;
   try{
     const r=await fetch("/api/version",{cache:"no-store"});const j=await r.json();const v=j.trades;
-    renderSyncBadge(j.sync);
+    renderSyncBadge(j.sync,j.candles);
     if(_dataVer===null){_dataVer=v;}
     else if(v!==_dataVer){_dataVer=v;await refreshData();showToast("資料已更新");}
   }catch(e){}finally{_verBusy=false;}
@@ -3207,7 +3213,35 @@ function tradingDaysBehind(lastDate){
   return n;
 }
 
-function renderSyncBadge(s){
+// K 線新鮮度徽章：交易帳與股價線是兩條獨立的鏈。2026-09-07 勞動節休市那次，
+// 使用者只看到「最新停在 9/4」，無從分辨是正確還是壞掉 —— 所以這裡一律講清楚
+// 「應該要有的最新交易日」是哪天、有沒有到手、今天為什麼沒有盤。
+function renderCandleBadge(c){
+  const el=document.getElementById("cdlbadge");
+  if(!el)return;
+  if(!c||c.error){el.style.display="none";return;}
+  el.style.display="";
+  if(c.up_to_date){
+    el.style.color="#6B7280";
+    el.textContent=`K線最新 ${c.expected}`;
+    el.title=`股價線已是最新：最近一個已收盤的美股交易日是 ${c.expected}，資料已在檔。
+`
+            +(c.today_closed_reason?`美東今日 ${c.today_et} ${c.today_closed_reason}休市，本來就沒有新資料。
+`:"")
+            +(c.checked_at?`上次檢查 ${c.checked_at}（每 60 分自動檢查）`:"");
+  }else{
+    el.style.color="#FF4444";
+    el.textContent=`✕K線缺 ${c.expected}`;
+    el.title=`股價線沒跟上：應該要有 ${c.expected} 的 K 線但檔案裡沒有。
+`
+            +(c.missing&&c.missing.length?`已重試仍缺：${c.missing.join(", ")}
+`:"")
+            +(c.checked_at?`上次檢查 ${c.checked_at}`:"尚未檢查過");
+  }
+}
+
+function renderSyncBadge(s,c){
+  renderCandleBadge(c);
   const el=document.getElementById("syncbadge");
   if(!el)return;
   if(!s||!s.updated_utc){el.style.display="none";return;}
@@ -3401,6 +3435,23 @@ REFRESH_INTERVAL_SEC  = 3600     # 每小時檢查一次
 REFRESH_MAX_ATTEMPTS  = 3        # 同一天連續抓空幾次就放棄（假日不必每小時重試）
 _refresh_attempts = {}
 
+# 美股行事曆（us_market_calendar.py）。抽成獨立模組是為了能單獨驗證 ——
+# 已用 history_minute.xlsx 裡 339 個真實交易日反向檢驗過：休市判定 0 誤判。
+try:
+    from us_market_calendar import (market_closed_reason as _closed_reason,
+                                    latest_completed_session as _latest_session)
+except Exception as _e:
+    print(f"  ⚠ 美股行事曆載入失敗，退回「只排除週末」：{type(_e).__name__}: {_e}")
+    def _closed_reason(d):
+        return "週末" if d.weekday() >= 5 else None
+    def _latest_session(now_et, close_hour=16, close_min=5):
+        d = now_et.date()
+        if now_et < dt.datetime.combine(d, dt.time(close_hour, close_min)):
+            d -= dt.timedelta(days=1)
+        while d.weekday() >= 5:
+            d -= dt.timedelta(days=1)
+        return d
+
 def _et_now():
     """美東現在時間（naive）。判斷「某天收盤了沒」只需要美東當地時間。"""
     try:
@@ -3411,32 +3462,71 @@ def _et_now():
         return dt.datetime.utcnow() - dt.timedelta(hours=4)
 
 def _settled_sessions(lookback_days=REFRESH_LOOKBACK_DAYS):
-    """回傳「已經收盤」的美股日期（新到舊）。
+    """回傳「已經收盤」的美股交易日（新到舊）。
 
-    只收已結束的盤：盤中抓只會拿到半天的 bar，而 _append_to_history 見到日期
-    已存在就不再更新 —— 那筆殘缺資料會被永久凍結。所以一律等 16:05 ET 之後才收。
+    兩道排除：
+    1. 非交易日（週末＋全天休市，見 us_market_calendar）。2026-09-07 勞動節就是
+       這類 —— 原本只排除週末，於是每小時去問 yfinance、抓空、靜默重試三次後放棄，
+       使用者只看得到「最新停在 9/4」卻無從分辨是休市還是壞掉。
+    2. 還沒收盤的當天：盤中抓只會拿到半天 bar，而 _append_to_history 見日期已存在
+       就不再更新 —— 那筆殘缺資料會被永久凍結。所以一律等 16:05 ET 之後才收。
     """
     now = _et_now()
     out = []
     for i in range(lookback_days):
         d = (now - dt.timedelta(days=i)).date()
-        if d.weekday() >= 5:            # 週末沒有盤
+        if _closed_reason(d):            # 週末或休市，本來就沒有盤
             continue
         if now < dt.datetime.combine(d, dt.time(16, 5)):
             continue                     # 當天還沒收盤（或還在盤中）
         out.append(d.strftime("%Y-%m-%d"))
     return out
 
+def _rlog(msg):
+    """補 K 線的運維日誌。務必 flush：pythonw 下 stdout 是檔案，預設區塊緩衝
+    會讓這些訊息卡在記憶體裡好幾個小時 —— 正好在你要查問題的時候看不到。"""
+    try:
+        print(msg, flush=True)
+    except Exception:
+        pass
+
+# 最近一次補 K 線的結果，供 /api/version 回報，讓前端能明確說出「資料是最新的」
+_refresh_status = {"checked_at": None, "expected": None, "have_expected": None,
+                   "added": [], "missing": [], "closed_today": None}
+
+def candle_currency():
+    """回答「K 線資料到底是不是最新的」—— 這是本次改動的重點。
+
+    原本使用者只看得到「最新停在 9/4」，無從分辨那是正確（9/7 勞動節休市）
+    還是壞掉（沒補進來）。有了行事曆，就能給出確定的答案而不是沉默。
+    """
+    now = _et_now()
+    expected = _latest_session(now).strftime("%Y-%m-%d")   # 應該要有的最新交易日
+    try:
+        hist = _load_history_by_date()
+        latest = max(hist.keys()) if hist else None
+        ok = expected in hist and bool(hist[expected])
+    except Exception:
+        latest, ok = None, False
+    today_reason = _closed_reason(now.date())
+    return {"expected": expected, "latest": latest, "up_to_date": ok,
+            "today_et": now.strftime("%Y-%m-%d"),
+            "today_closed_reason": today_reason,
+            "checked_at": _refresh_status.get("checked_at"),
+            "missing": _refresh_status.get("missing") or []}
+
 def _refresh_recent_candles():
     """把最近幾個已收盤交易日補進 history_minute.xlsx。回傳實際補進的日期。"""
-    added = []
-    for ds in _settled_sessions():
+    added, missing = [], []
+    sessions = _settled_sessions()
+    for ds in sessions:
         try:
             hist = _load_history_by_date()
             if ds in hist and hist[ds]:
                 continue                 # 已經有了
             if _refresh_attempts.get(ds, 0) >= REFRESH_MAX_ATTEMPTS:
-                continue                 # 多半是假日，別再敲 yfinance
+                missing.append(ds)       # 試過仍拿不到 —— 這才是真的異常
+                continue
             # 清掉負快取：常駐 app 下，一次網路抖動就會讓這天在本 process 內
             # 永遠不再重試。每輪重新給它機會，靠 attempts 上限收斂。
             _negative_cache.discard(ds)
@@ -3446,12 +3536,28 @@ def _refresh_recent_candles():
                 added.append(f"{ds}({len(bars)}根)")
                 _refresh_attempts.pop(ds, None)
             else:
-                _refresh_attempts[ds] = _refresh_attempts.get(ds, 0) + 1
+                n = _refresh_attempts.get(ds, 0) + 1
+                _refresh_attempts[ds] = n
+                _rlog(f"[refresh] {ds} 抓不到資料（第 {n}/{REFRESH_MAX_ATTEMPTS} 次）"
+                      f"—— 該日並非休市日，請留意")
+                if n >= REFRESH_MAX_ATTEMPTS:
+                    missing.append(ds)
         except Exception as e:
             _refresh_attempts[ds] = _refresh_attempts.get(ds, 0) + 1
-            print(f"[refresh] {ds} 失敗：{type(e).__name__}: {e}")
+            _rlog(f"[refresh] {ds} 失敗：{type(e).__name__}: {e}")
+    # 每輪都留下紀錄：安靜要能被證明是「正確的安靜」，不是「沒在跑」
+    cur = candle_currency()
+    _refresh_status.update({"checked_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
+                            "expected": cur["expected"], "have_expected": cur["up_to_date"],
+                            "added": added, "missing": missing,
+                            "closed_today": cur["today_closed_reason"]})
     if added:
-        print(f"[refresh] {dt.datetime.now():%m-%d %H:%M} 已補 K 線：{', '.join(added)}")
+        _rlog(f"[refresh] {dt.datetime.now():%m-%d %H:%M} 已補 K 線：{', '.join(added)}")
+    else:
+        why = f"；美東今日 {cur['today_et']} {cur['today_closed_reason']}休市"               if cur["today_closed_reason"] else ""
+        _rlog(f"[refresh] {dt.datetime.now():%m-%d %H:%M} 無需補件"
+              f"（最新已收盤交易日 {cur['expected']} 已在檔){why}"
+              + (f"；仍缺 {', '.join(missing)}" if missing else ""))
     return added
 
 def _refresh_loop():
@@ -3460,7 +3566,7 @@ def _refresh_loop():
         try:
             _refresh_recent_candles()
         except Exception as e:
-            print(f"[refresh] 迴圈例外（略過本輪）：{type(e).__name__}: {e}")
+            _rlog(f"[refresh] 迴圈例外（略過本輪）：{type(e).__name__}: {e}")
         time.sleep(REFRESH_INTERVAL_SEC)
 
 

@@ -237,6 +237,27 @@ App 內建 `candle-refresher` daemon 執行緒：每 60 分鐘把最近 7 個日
    常駐 app 下，一次網路抖動會讓那天在整個 process 生命週期內不再重試；
    而假日若無上限則會每小時空敲 yfinance。
 
+### 美股行事曆與「安靜要能被證明」（2026-09-08 加）
+
+`us_market_calendar.py`：全天休市日（含耶穌受難日、觀察日順延）與
+`latest_completed_session()`。已用 `history_minute.xlsx` 裡 339 個真實交易日
+反向檢驗，**休市判定 0 誤判**。
+
+起因：2026-09-07 勞動節休市，使用者看到「K 線最新只到 9/4」卻無從分辨那是
+正確還是壞掉 —— 原本 refresher 只排除週末，遇到平日休市會照樣問 yfinance、
+抓空、靜默重試三次後放棄，**完全沒有留下任何紀錄**。
+
+三項對策，改動時勿破壞：
+
+1. `_settled_sessions` 用行事曆排除休市日，不再空敲 yfinance。
+2. `_refresh_recent_candles` **每輪都寫日誌**（`_rlog`，強制 flush ——
+   pythonw 下 stdout 是檔案，區塊緩衝會讓運維訊息卡在記憶體裡好幾小時，
+   正好在你要查問題時看不到）。無需補件時也會說明「為什麼今天沒有新資料」。
+3. `/api/version` 增加 `candles` 區塊、標頭增加 **K 線徽章**（`#cdlbadge`），
+   直接回答「應該要有哪天、有沒有到手、今天為何沒有盤」。
+   它與交易帳徽章（`#syncbadge`）**刻意分開** —— 股價線與交易帳是兩條獨立的鏈，
+   任一條停掉都必須各自看得出來。
+
 - `trade_review_app.py` 以 `pd.read_excel(dtype=str)` + `_norm_date` 讀 trades_all，
   並會在分析後把整表 write-back（字串化）。routine 只負責 append，不要動舊列。
 - App 不讀寫 CS交易紀錄.xlsx，CS 格式問題與 App 無關。
