@@ -21,8 +21,7 @@ import datetime as dt
 import os, json, sys, argparse, time
 
 # ── Config ──────────────────────────────────────────────────────────────────
-_BASE = os.path.dirname(os.path.abspath(__file__))
-CANDLES_FOLDER = os.path.join(_BASE, "candles")
+CANDLES_FOLDER = r"C:\TradeReview\candles"
 TICKER_BBG = "SPY US Equity"   # Bloomberg ticker
 TICKER_FILE = "SPY"            # filename prefix (matches free app & daily_fetch)
 # ────────────────────────────────────────────────────────────────────────────

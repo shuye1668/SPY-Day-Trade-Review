@@ -1,33 +1,6 @@
 # TradeReview 遷移指南（移到另一台電腦）
 
-最後更新：2026-07-29。定位：把**目前真正在用的**流程搬到新機，不是復活舊的 Drive/Gmail 自動管線。
-
----
-
-## 0. 【2026-07-29 已執行】資料夾位置變更
-
-```
-舊：C:\TradeReview新：D:ileserver_D\TradeReview\      ← 現行位置，所有文件與排程都已指到這裡
-```
-
-搬遷當下做過的事（避免下次再踩）：
-
-| 項目 | 處理 |
-|---|---|
-| 文件內的路徑（操作手冊／人工SOP／搬遷清單／MIGRATION／SETUP_FREE） | 全部改成新路徑 |
-| 資料夾外的 `~/.claude/scheduled-tasks/spy-daytrade-auto-csv/SKILL.md`（06:47 排程） | 已改（**整包複製帶不到，最容易漏**） |
-| 周邊工具（daily_fetch／historical_backfill／build_history_xlsx／make_colors／make_dividends／trade_review_app_free／trade_review_local） | 由寫死路徑改成**相對腳本所在目錄**，之後再搬不必改碼 |
-| 兩支舊啟動 bat（`SPY_Day_Trade_Review.bat`／`start_app_free.bat`） | `cd /d C:\TradeReview` → `cd /d "%~dp0"` |
-| `決策樹.png` 與產圖腳本 | 圖上的路徑文字已重生 |
-| 舊資料夾殘留的 app 行程 | 舊資料夾曾有一個 app 同時佔用 5500（兩個 listener），已關閉；`每日一鍵複盤.bat` 的 `killapp` 也改成**殺光所有 5500 listener**，不再只殺第一個 |
-
-**沒有改**（刻意保留）：`archive\`、`app.log`／`_logs\*.log`、`*_backup_*.py`、`HANDOFF_export_label_fix.md`
-——這些是歷史紀錄，改了等於竄改；以及 CLAUDE.md 明訂**已停用**的每日拋棄式腳本
-（`fix_and_rerun.py`、`process_*.py`、`rebuild_cs_*.py`、`write_616.py`、`migrate_trades.py`），
-它們仍寫死舊路徑，**本來就不該再跑**。
-
-> ⚠️ 舊的 `C:\TradeReview\` 若還留著：**不要再從那裡雙擊任何東西**。
-> 那邊的 `每日一鍵複盤.bat` 仍會寫入舊資料夾的帳本，兩邊帳一分岔就很難併回來。
+最後更新：2026-07-24。定位：把**目前真正在用的**流程搬到新機，不是復活舊的 Drive/Gmail 自動管線。
 
 ---
 
@@ -46,7 +19,7 @@
 
 ## 1. 可攜核心：要複製到新機的東西
 
-整個 `D:\fileserver_D\TradeReview\` 資料夾複製過去即可（引擎/writer 路徑已改為「相對腳本所在目錄」，換路徑不必改碼）。
+整個 `C:\TradeReview\` 資料夾複製過去即可（引擎/writer 路徑已改為「相對腳本所在目錄」，換路徑不必改碼）。
 
 **必要檔**：
 - 程式：`trade_review_app.py`、`spy_daytrade_engine.py`、`spy_daytrade_writer.py`、`war_chart.py`
@@ -68,7 +41,7 @@
 :: 1. 裝 Python（PATH 要有 python）+ 套件
 pip install flask pandas numpy openpyxl yfinance
 
-:: 2. 複製整個 D:\fileserver_D\TradeReview 過去（或放任一路徑，程式用相對路徑）
+:: 2. 複製整個 C:\TradeReview 過去（或放任一路徑，程式用相對路徑）
 
 :: 3. 驗證引擎可跑（拿任一天 CSV 乾跑）
 python spy_daytrade_engine.py <某日statement.csv> --date YYYY-MM-DD
@@ -122,7 +95,7 @@ python spy_daytrade_engine.py <某日statement.csv> --date YYYY-MM-DD
   例：某營業日盤中最後兩筆顯示在午夜後 → 用它們的實際日曆日期。
 - 存成 `.csv` 後接 §4 步驟 2。引擎的 BALANCE 交叉驗證會逐列擋下抄錯（這正是截圖 OCR 最容易錯的地方）。
 
-範例 CSV：`D:\fileserver_D\TradeReview\_inbox\2026-07-22_23_example.csv`（07-22/07-23 實例，含拆單與跨午夜列）。
+範例 CSV：`C:\TradeReview\_inbox\2026-07-22_23_example.csv`（07-22/07-23 實例，含拆單與跨午夜列）。
 
 ---
 

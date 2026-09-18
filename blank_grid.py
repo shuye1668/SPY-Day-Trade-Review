@@ -11,7 +11,7 @@ SPY 同一週內隔日跳太多時，相鄰兩天落在不重疊價格帶，並�
 CSS px(與哪天無關)、ISO 週首日(週一)左軸其餘右軸 → 確保補頁能與真實輸出實體拼接。
 完全不 import 也不修改 trade_review_app.py，對原 app 零影響。
 
-輸出：預設存到「這支腳本旁邊」的 blank_out\ (即 D:\\fileserver_D\\TradeReview\\blank_out\\)，不管從哪裡啟動；
+輸出：預設存到「這支腳本旁邊」的 blank_out\ (即 C:\\TradeReview\\blank_out\\)，不管從哪裡啟動；
        執行完會印出完整路徑。也可用第 8 題 / --out 改。
 
 用法:

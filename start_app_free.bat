@@ -3,7 +3,7 @@ REM ─────────────────────────�
 REM  Trade Review — FREE version launcher
 REM  Double-click to start the local web app on http://localhost:5501
 REM ─────────────────────────────────────────────────────────
-cd /d "%~dp0"
+cd /d C:\TradeReview
 
 REM Optional: catch up missing days first (silent if nothing to do)
 python daily_fetch.py --catchup

@@ -15,7 +15,6 @@ offset 是常數，只在留倉/平倉日跳動——而那些日子會被引擎
 所以 auto-commit 的日子 offset 不變。offset 值持久化在 offset_state.json，
 人工處理留倉/平倉日後手動更新該檔。
 """
-import contextlib
 import json
 import os
 import shutil
@@ -52,33 +51,6 @@ def check_lock(path):
         raise RuntimeError(f"§5 鎖檔存在（Excel 開著？）：{path}，請關閉後重跑")
 
 
-# ── 與常駐 app 的互斥 ────────────────────────────────────────────────────────
-WRITER_LOCK = os.path.join(_BASE, ".writer.lock")
-STALE_LOCK_SECONDS = 600   # 10 分鐘；writer 正常執行是秒級，超過必定是殘留
-
-@contextlib.contextmanager
-def writer_lock():
-    """寫入期間宣告互斥，擋掉常駐 app 的 trades_all 回寫。
-
-    trade_review_app 的 _analyse_all_trades() 會把整張 trades_all 回寫
-    （見 trade_review_app.py 的 df.to_excel），而 app 是 pythonw 常駐、每 4 秒
-    偵測 mtime。writer 正在 openpyxl save 時若撞上這個回寫，兩邊會互相蓋掉，
-    而且無人看管的 Boss PC 上不會有人發現。
-
-    殘留鎖處理：writer 若被強制中斷可能留下鎖檔，逾時後視為無效，
-    否則 app 會永遠不再回寫。
-    """
-    try:
-        with open(WRITER_LOCK, "w", encoding="utf-8") as f:
-            f.write(f"{os.getpid()}\n{datetime.now().isoformat()}\n")
-        yield
-    finally:
-        try:
-            os.remove(WRITER_LOCK)
-        except OSError:
-            pass
-
-
 def backup(path):
     dst = path.replace(".xlsx", f"_backup_{datetime.now():%Y%m%d}.xlsx") \
         if False else path[:-5] + f"_backup_{_today()}.xlsx"
@@ -108,25 +80,6 @@ def day_already_written(ws, dot):
     """§5.5.1 冪等：CS 個別識別法 已含該日 Day Header（A=='YYYY.MM.DD' 且 C=='損益'）。"""
     for r in range(1, last_nonempty_row(ws) + 1):
         if ws.cell(r, 1).value == dot and ws.cell(r, 3).value == "損益":
-            return True
-    return False
-
-
-def day_already_in_trades(ws, edt_date):
-    """--trades-only 模式的冪等判斷。
-
-    trades_only 模式沒有 CS 帳可查（Boss PC 上根本不存在該檔），改查
-    trades_all 的 Date 欄是否已有該交易日。Date 欄是字串 'YYYY-MM-DD'
-    （CLAUDE.md §一：嚴禁寫入 datetime 物件），但歷史列若曾被其他工具
-    寫成 datetime 也要能認得，故兩種型別都比對。
-    """
-    for r in range(2, ws.max_row + 1):     # 第 1 列是表頭
-        v = ws.cell(r, 1).value
-        if v is None or v == "":
-            continue
-        if isinstance(v, datetime):
-            v = v.strftime("%Y-%m-%d")
-        if str(v).strip()[:10] == edt_date:
             return True
     return False
 
@@ -220,7 +173,7 @@ def append_hold_section(ws, rows):
 
 
 def write_cumulative(wb, session, day_pnl):
-    cs = wb["累積損益check"]  # 選 sheet 用名稱，避免夾層 Sheet1 造成 index 位移（2026-08-10 修）
+    cs = wb.worksheets[1]  # 累積損益check
     last = last_nonempty_row(cs, ncols=3)
     r = last + 1
     y, m, d = [int(x) for x in session.edt_date.split("-")]
@@ -273,74 +226,6 @@ def verify_cs(ws, hr, d0, dN, session, offset):
 
 
 # ── 主 commit ────────────────────────────────────────────────────────────────
-def commit_trades_only(sessions, trades_path=TRADES_PATH_DEFAULT):
-    """第一段專用：只寫 trades_all，完全不碰 CS交易紀錄／offset_state。
-
-    用於 Boss PC（交易機）—— 它只負責 CLAUDE.md 的第一段「對帳單→trades_all」，
-    第二段「trades_all→CS」連同人工修正一律留在 502。Boss 上根本沒有 CS 檔，
-    所以 header_B / verify_cs / write_cumulative / offset 這條線整條跳過。
-
-    ⚠️ 安全閘門一條都沒放寬：gate() 檢查的 open/close 餘額明確性、每筆
-    needs_review、以及 BALANCE 對不上／留倉／非交易現金，全都是 session
-    層級的判斷，不依賴 CS。§1b 的逐列餘額重建也在引擎端就做完了。
-    """
-    blocked = {}
-    for s in sessions:
-        r = gate(s)
-        if r:
-            blocked[s.edt_date] = r
-    if blocked:
-        print("🔴 以下 session 需人工確認，全部不寫入：")
-        for d, rs in blocked.items():
-            print(f"  {d}:")
-            for x in rs:
-                print(f"    • {x}")
-        return False
-
-    check_lock(trades_path)
-    b = backup(trades_path)
-    print(f"§3 備份：{os.path.basename(b)}")
-
-    try:
-        wb_tr = openpyxl.load_workbook(trades_path)
-        tr = wb_tr.active
-
-        written = 0
-        for s in sessions:
-            if day_already_in_trades(tr, s.edt_date):
-                print(f"— {s.edt_date} 已存在於 trades_all（冪等跳過，不重寫）")
-                continue
-            backlink_pairs(s)
-            n_before = tr.max_row
-            write_trades_all(tr, s)
-            written += 1
-            print(f"✔ {s.edt_date} 寫入 trades_all：{tr.max_row - n_before} 列")
-
-        if written == 0:
-            print("（無新資料可寫——所有 session 皆已存在，冪等跳過）")
-            return True
-
-        wb_tr.save(trades_path)
-
-        # 寫後核驗（§四.6）：新列 Date 欄必須是 str，不能是 datetime
-        wb_chk = openpyxl.load_workbook(trades_path)
-        ws_chk = wb_chk.active
-        bad = [r for r in range(2, ws_chk.max_row + 1)
-               if isinstance(ws_chk.cell(r, 1).value, datetime)]
-        if bad:
-            raise RuntimeError(f"§4.6 Date 欄型別錯誤（datetime）於列 {bad[:5]}")
-        for s in sessions:
-            if not day_already_in_trades(ws_chk, s.edt_date):
-                raise RuntimeError(f"§4 寫後核驗失敗：{s.edt_date} 未出現在 trades_all")
-
-        print(f"✅ {written} 個交易日寫入 trades_all 完成並通過核驗")
-        return True
-    except Exception as e:
-        shutil.copy2(b, trades_path)
-        print(f"❌ 寫入失敗，已還原備份：{e}")
-        raise
-
-
 def commit(sessions, cs_path=CS_PATH_DEFAULT, trades_path=TRADES_PATH_DEFAULT,
            dry_report=True):
     st = load_offset()
@@ -425,8 +310,6 @@ def main():
     ap.add_argument("--cs", default=CS_PATH_DEFAULT)
     ap.add_argument("--trades", default=TRADES_PATH_DEFAULT)
     ap.add_argument("--commit", action="store_true")
-    ap.add_argument("--trades-only", action="store_true",
-                    help="只寫 trades_all，不碰 CS交易紀錄／offset_state（Boss PC 第一段用）")
     a = ap.parse_args()
     with open(a.csv_path, encoding="utf-8-sig") as fh:
         text = fh.read()
@@ -436,17 +319,9 @@ def main():
     for s in sessions:
         process_session(s)
     if a.commit:
-        # 鎖在呼叫端取得，一處涵蓋備份與兩條寫入路徑，
-        # commit()/commit_trades_only() 內部完全不必改動。
-        with writer_lock():
-            if a.trades_only:
-                ok = commit_trades_only(sessions, a.trades)
-            else:
-                ok = commit(sessions, a.cs, a.trades)
-        sys.exit(0 if ok else 2)   # 被 gate 擋下時回非 0，讓呼叫端腳本知道別繼續
+        commit(sessions, a.cs, a.trades)
     else:
-        mode = "trades-only" if a.trades_only else "full"
-        print(f"[DRY-RUN] writer 未寫入（{mode}）。session:", [s.edt_date for s in sessions])
+        print("[DRY-RUN] writer 未寫入。session:", [s.edt_date for s in sessions])
 
 
 if __name__ == "__main__":

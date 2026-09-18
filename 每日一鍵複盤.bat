@@ -370,32 +370,20 @@ goto :eof
 
 rem -- stop the review app if it is listening on 5500 (python processes only) -
 :killapp
-set "KILLED="
-set "BUSY="
-for /f "tokens=5" %%p in ('netstat -ano -p TCP 2^>nul ^| findstr /c:":5500 " ^| findstr /c:"LISTENING"') do call :killone %%p
-if defined KILLED goto :killdone
-if defined BUSY goto :eof
-call :say "  \u6c92\u6709\u6b63\u5728\u57f7\u884c\u7684 App\uff0c\u7565\u904e"
-goto :eof
-
-:killdone
+set "APPPID="
+for /f "tokens=5" %%p in ('netstat -ano -p TCP 2^>nul ^| findstr /c:":5500 " ^| findstr /c:"LISTENING"') do if not defined APPPID set "APPPID=%%p"
+if not defined APPPID (
+  call :say "  \u6c92\u6709\u6b63\u5728\u57f7\u884c\u7684 App\uff0c\u7565\u904e"
+  goto :eof
+)
+tasklist /fi "PID eq %APPPID%" /nh 2>nul | findstr /i /c:"python" >nul
+if errorlevel 1 (
+  call :say "\u26a0 \u9023\u63a5\u57e0 5500 \u88ab\u975e Python \u7684\u7a0b\u5f0f\u5360\u7528\uff0c\u672c\u7a0b\u5f0f\u4e0d\u6703\u5f37\u5236\u95dc\u9589\u5b83\u3002\n   \u82e5\u7a0d\u5f8c\u7db2\u9801\u6253\u4e0d\u958b\uff0c\u8acb\u624b\u52d5\u8655\u7406\u8a72\u7a0b\u5f0f\u3002"
+  goto :eof
+)
+taskkill /f /pid %APPPID% >nul 2>&1
 %PY% -c "import time;time.sleep(1.5)"
 call :say "  \u5df2\u95dc\u9589\u820a\u7684 App"
-goto :eof
-
-rem -- kill one listener pid, python processes only. Port 5500 can have more
-rem -- than one listener (an app left over from an old folder, for example),
-rem -- so every pid found must be handled, not just the first one.
-:killone
-tasklist /fi "PID eq %~1" /nh 2>nul | findstr /i /c:"python" >nul
-if errorlevel 1 goto :killbusy
-taskkill /f /pid %~1 >nul 2>&1
-set "KILLED=1"
-goto :eof
-:killbusy
-if defined BUSY goto :eof
-set "BUSY=1"
-call :say "\u26a0 \u9023\u63a5\u57e0 5500 \u88ab\u975e Python \u7684\u7a0b\u5f0f\u5360\u7528\uff0c\u672c\u7a0b\u5f0f\u4e0d\u6703\u5f37\u5236\u95dc\u9589\u5b83\u3002\n   \u82e5\u7a0d\u5f8c\u7db2\u9801\u6253\u4e0d\u958b\uff0c\u8acb\u624b\u52d5\u8655\u7406\u8a72\u7a0b\u5f0f\u3002"
 goto :eof
 
 rem -- wait for a tcp port: %1 = port, %2 = tries (2s apart) -------------------

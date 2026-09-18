@@ -1,4 +1,4 @@
-"""Generate D:\\fileserver_D\\TradeReview\\colors.xlsx (3 color versions).
+"""Generate C:\TradeReview\colors.xlsx (3 color versions).
 Run once: python make_colors_xlsx.py
 After creation, edit rows in Excel anytime; app re-reads the file at startup.
 Up to 4 versions will be read by the app.
@@ -6,7 +6,7 @@ Up to 4 versions will be read by the app.
 Border columns are optional — leave empty for no border ring on endpoints.
 """
 import pandas as pd, os
-OUT_DIR = os.path.dirname(os.path.abspath(__file__))
+OUT_DIR = r"C:\TradeReview"
 OUT = os.path.join(OUT_DIR, "colors.xlsx")
 os.makedirs(OUT_DIR, exist_ok=True)
 df = pd.DataFrame([

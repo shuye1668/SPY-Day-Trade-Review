@@ -5,7 +5,7 @@ Reads SPY 1-minute candles from local JSON cache (populated by daily_fetch.py).
 Trades come from a single Excel file `trades_all.xlsx` with a Date column.
 
 Folder layout:
-  D:\\fileserver_D\\TradeReview\\
+  C:\\TradeReview\\
     trades_all.xlsx           ← all trades, with Date column (YYYY-MM-DD)
     notes\\
       2026-04-08.txt          ← per-day notes
@@ -16,11 +16,10 @@ Setup:
   pip install flask pandas numpy openpyxl yfinance
   python trade_review_app_free.py → http://localhost:5500
 """
-import os as _os
-ROOT_FOLDER=_os.path.dirname(_os.path.abspath(__file__))
-TRADES_FILE=_os.path.join(ROOT_FOLDER,"trades_all.xlsx")
-NOTES_FOLDER=_os.path.join(ROOT_FOLDER,"notes")
-CANDLES_FOLDER=_os.path.join(ROOT_FOLDER,"candles")
+ROOT_FOLDER=r"C:\TradeReview"
+TRADES_FILE=r"C:\TradeReview\trades_all.xlsx"
+NOTES_FOLDER=r"C:\TradeReview\notes"
+CANDLES_FOLDER=r"C:\TradeReview\candles"
 TICKER="SPY"
 PORT=5501
 

@@ -52,29 +52,6 @@ FEE_MAX = 3.00          # 每 100 股手續費合理上限（超過視為異常�
 EPS = 0.011             # 金額比對容差
 
 
-def balances_from_statement(csv_path, date):
-    """從對帳單 CSV 取出指定 EDT 交易日的 (期初餘額, 收盤餘額, session 列數)。
-
-    刻意直接沿用引擎的 parse_statement/group_sessions，而不是自己再寫一套
-    CSV 解析 —— 期初餘額的定義（BAL 列、CST→EDT 換日、跨午夜歸屬哪一個
-    session）全部由引擎決定。自己重寫一份遲早會與 writer 的認定分岔，
-    而那正是最難察覺、後果最嚴重的一類錯誤。
-
-    找不到該日 session 時回傳 (None, None, 0)。
-    """
-    sys.path.insert(0, _BASE)
-    from spy_daytrade_engine import parse_statement, group_sessions
-
-    with open(csv_path, encoding="utf-8-sig") as fh:
-        sessions = group_sessions(parse_statement(fh.read()))
-    for s in sessions:
-        # s.trades 要 process_session() 之後才有內容；這裡只取餘額，
-        # 所以回報原始成交列數 s.fills 才是真實的。
-        if s.edt_date == date:
-            return s.open_bal, s.close_bal, len(s.fills)
-    return None, None, 0
-
-
 # ── 共用小工具 ───────────────────────────────────────────────────────────────
 def last_nonempty_row(ws, ncols=5):
     for r in range(ws.max_row, 0, -1):
@@ -336,43 +313,14 @@ def main():
     ap = argparse.ArgumentParser(
         description="讀 trades_all.xlsx，append 當日區塊到 CS交易紀錄.xlsx")
     ap.add_argument("--date", required=True, help="交易日 YYYY-MM-DD")
-    ap.add_argument("--open-bal", type=float, default=None,
-                    help="券商當日期初餘額（對帳單 BAL 行）；未給則需 --from-statement")
+    ap.add_argument("--open-bal", type=float, required=True,
+                    help="券商當日期初餘額（對帳單 BAL 行）")
     ap.add_argument("--close-bal", type=float, default=None,
                     help="券商當日收盤餘額（最後一筆 BALANCE）；強烈建議提供")
-    ap.add_argument("--from-statement", metavar="CSV",
-                    help="從對帳單 CSV 自動帶出期初/收盤餘額（省略路徑則用 "
-                         "_inbox\\<date>.csv）。Boss PC 同步過來的原始對帳單就在那")
     ap.add_argument("--trades", default=TRADES_PATH)
     ap.add_argument("--cs", default=CS_PATH)
     ap.add_argument("--commit", action="store_true", help="實際寫入（預設 dry-run）")
     a = ap.parse_args()
-
-    # ── 自動帶入期初/收盤餘額 ────────────────────────────────────────────
-    # 期初餘額（BAL 行）過去只能靠人工從對帳單/OCR 找，是每天最容易出錯也最
-    # 花時間的一步。Boss PC 會把原始對帳單 CSV 一起同步過來，直接讀就好。
-    if a.from_statement is not None or a.open_bal is None:
-        stmt = a.from_statement or os.path.join(_BASE, "_inbox", f"{a.date}.csv")
-        if not os.path.exists(stmt):
-            print(f"🔴 找不到對帳單：{stmt}")
-            print("   請改用 --open-bal/--close-bal 手動指定，或確認 git pull 已同步。")
-            sys.exit(1)
-        try:
-            ob, cb, nrow = balances_from_statement(stmt, a.date)
-        except Exception as e:
-            print(f"🔴 對帳單解析失敗（{stmt}）：{type(e).__name__}: {e}")
-            sys.exit(1)
-        if ob is None:
-            print(f"🔴 對帳單裡找不到 {a.date} 的 BAL 列（期初餘額）。")
-            print("   OCR 模式常漏抓 BAL/DOI/JRN 列 —— 這正是 offset_state.json")
-            print("   記載 2026-08-05 需要回推的原因。請補齊對帳單後重跑。")
-            sys.exit(1)
-        if a.open_bal is None:
-            a.open_bal = ob
-        if a.close_bal is None:
-            a.close_bal = cb
-        print(f"[自動帶入] 來源 {os.path.basename(stmt)}（對帳單 {nrow} 筆成交）"
-              f" 期初={a.open_bal} 收盤={a.close_bal}")
 
     offset = load_offset()
     rows, problems = load_day(a.date, a.trades)

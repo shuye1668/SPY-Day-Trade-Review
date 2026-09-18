@@ -11,7 +11,7 @@ a single consolidated Excel file.
 Set up this layout on the computer where you'll review trades:
 
 ```
-D:\fileserver_D\TradeReview\
+C:\TradeReview\
 ├── trade_review_app_free.py    ← main web app
 ├── daily_fetch.py              ← yfinance daily fetch + catchup
 ├── historical_backfill.py      ← one-time Bloomberg backfill (only on BBG terminal)
@@ -47,7 +47,7 @@ pip install --index-url=https://blpapi.bloomberg.com/repository/releases/python/
 
 ## 3. Excel Trades File Format
 
-Create `D:\fileserver_D\TradeReview\trades_all.xlsx` with these columns (in this order):
+Create `C:\TradeReview\trades_all.xlsx` with these columns (in this order):
 
 | Date       | Exec Time(EDT) | Symbol | Price   | Type | 損益(AI辨識) | Shares |
 |------------|----------------|--------|---------|------|--------------|--------|
@@ -74,11 +74,11 @@ also accept `YYYY/MM/DD`, `MM/DD/YYYY`, or `YYYYMMDD` if that's what Excel gives
 ## 4. One-Time Historical Backfill (run on Bloomberg Terminal computer)
 
 This pulls all your past data from Bloomberg in one go and saves it as JSON files
-in `D:\fileserver_D\TradeReview\candles\`. Copy these files to your target computer afterwards
+in `C:\TradeReview\candles\`. Copy these files to your target computer afterwards
 (or just run everything from the Bloomberg machine).
 
 ```cmd
-cd D:\fileserver_D\TradeReview
+cd C:\TradeReview
 python historical_backfill.py --days 730        REM 2 years
 ```
 
@@ -97,7 +97,7 @@ python historical_backfill.py --force           REM overwrite existing files
 
 ### Manual test
 ```cmd
-cd D:\fileserver_D\TradeReview
+cd C:\TradeReview
 python daily_fetch.py --catchup
 ```
 
@@ -134,7 +134,7 @@ You should see something like:
    - Action: "Start a program"
    - Program/script: `python` (or full path like `C:\Python312\python.exe` if needed)
    - Add arguments: `daily_fetch.py --catchup`
-   - Start in: `D:\fileserver_D\TradeReview`
+   - Start in: `C:\TradeReview`
 6. **Conditions tab**:
    - UNcheck ❌ "Start the task only if the computer is on AC power" (laptop users)
 7. **Settings tab**:
@@ -147,7 +147,7 @@ You should see something like:
 schtasks /run /tn "SPY Daily Fetch"
 ```
 
-Then check `D:\fileserver_D\TradeReview\candles\` to see the new JSON file.
+Then check `C:\TradeReview\candles\` to see the new JSON file.
 
 ---
 
@@ -182,9 +182,9 @@ will catch up missing days automatically (up to 7 days back by default).
 Once a week (or after big sessions), zip and back up:
 
 ```
-D:\fileserver_D\TradeReview\trades_all.xlsx
-D:\fileserver_D\TradeReview\notes\
-D:\fileserver_D\TradeReview\candles\
+C:\TradeReview\trades_all.xlsx
+C:\TradeReview\notes\
+C:\TradeReview\candles\
 ```
 
 These three are your entire archive. Everything else is reproducible from this

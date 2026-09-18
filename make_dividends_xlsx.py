@@ -1,4 +1,4 @@
-"""Generate D:\\fileserver_D\\TradeReview\\dividends.xlsx (SPY ex-dividend dates).
+"""Generate C:\\TradeReview\\dividends.xlsx (SPY ex-dividend dates).
 Run once to create template; fill in actual ex-dividend dates and per-share amounts
 from broker statements. The app re-reads this file at startup.
 
@@ -7,7 +7,7 @@ Columns:
   Dividend_Per_Share    — USD per share (gross; app applies *0.7 for Taiwan tax)
 """
 import pandas as pd, os
-OUT_DIR = os.path.dirname(os.path.abspath(__file__))
+OUT_DIR = r"C:\TradeReview"
 OUT = os.path.join(OUT_DIR, "dividends.xlsx")
 os.makedirs(OUT_DIR, exist_ok=True)
 df = pd.DataFrame([

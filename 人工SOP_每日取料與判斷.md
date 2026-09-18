@@ -55,17 +55,17 @@
                                 └─【跑不動／老闆在用】→ 走 ⑤
 
 ──────────────────────────────────────────────────────────────────────
-③ 複製兩行「中間」整段 → 存成 D:\fileserver_D\TradeReview\_inbox\YYYY-MM-DD.csv ─────┐
+③ 複製兩行「中間」整段 → 存成 C:\TradeReview\_inbox\YYYY-MM-DD.csv ─────┐
                                                                           │
 ⑤ 截圖對帳單（要拍全，見 7.1）                                            │
   ▼                                                                       │
-⑥ 在 502 這台（放 D:\fileserver_D\TradeReview\ 的那台）開 Claude 對話                  │
+⑥ 在 502 這台（放 C:\TradeReview\ 的那台）開 Claude 對話                  │
    貼 PROMPT_轉trades_all.md 整段 ＋ 截圖（第 7 節）                       │
    → AI 更新 trades_all.xlsx，並回報「期初餘額／收盤餘額」                │
   │                                                                       │
   ├─【AI 也不能用】→ ⑦ 逐列手抄成 CSV（第 8 節，最後手段）→ 存 _inbox ─────┤
   ▼                                                                       ▼
-★ 雙擊 D:\fileserver_D\TradeReview\每日一鍵複盤.bat  ←──────────────────────────────────┘
+★ 雙擊 C:\TradeReview\每日一鍵複盤.bat  ←──────────────────────────────────┘
    ├ 手上有 CSV（③ 或 ⑦）      → 它自己挑檔、自己跑完
    └ 只有 trades_all 更新了（⑥）→ 選單選 2，輸入 交易日／期初／收盤
   │
@@ -92,11 +92,11 @@
    DATE,TIME,TYPE,REF #,DESCRIPTION,Misc Fees,Commissions & Fees,AMOUNT,BALANCE
    ```
 4. 開記事本 → 貼上 → **另存新檔**：
-   - 位置：`D:\fileserver_D\TradeReview\_inbox\`
+   - 位置：`C:\TradeReview\_inbox\`
    - 檔名：**當天日期 + `.csv`**，例如 `2026-07-27.csv`
    - 存檔類型：**所有檔案**（不然會變成 `.csv.txt`）
    - 編碼：**UTF-8**
-5. 雙擊 `D:\fileserver_D\TradeReview\每日一鍵複盤.bat`，接下來它會自己跑完。中間只會問一次
+5. 雙擊 `C:\TradeReview\每日一鍵複盤.bat`，接下來它會自己跑完。中間只會問一次
    「要用這個檔案跑嗎」，確認檔名對就直接等（20 秒沒回答會自動繼續）。
 
 > **數字有逗號（`"75,307.00"`）沒關係**，程式看得懂，不用手動清掉。
@@ -128,7 +128,7 @@
 ## 6. 情境 D：沒有草稿 → 去老闆電腦重跑匯出
 
 > ⚠️ **這一節的操作步驟目前沒有任何文件記錄**（原始的 `tos_export.ahk` 觸發程式不在
-> `D:\fileserver_D\TradeReview\`，推測在老闆電腦上，來源不明——見 `MIGRATION.md` §5.6）。
+> `C:\TradeReview\`，推測在老闆電腦上，來源不明——見 `MIGRATION.md` §5.6）。
 > **請第一次執行過的人把實際步驟填進來**，不要口耳相傳。
 
 ### 【待填】老闆電腦上的實際步驟
@@ -162,7 +162,7 @@
 ## 7. 情境 E：只有截圖 → 貼給 502 這台的 Claude 對話（**標準做法**）
 
 > **不要逐列手抄。** 截圖判讀交給 AI，你只負責「拍好截圖」和「檢查它回報的結果」。
-> **必須在 502 這台（放 `D:\fileserver_D\TradeReview\` 的那台）開對話**——AI 要直接寫 `trades_all.xlsx`，
+> **必須在 502 這台（放 `C:\TradeReview\` 的那台）開對話**——AI 要直接寫 `trades_all.xlsx`，
 > 在別台電腦開對話它碰不到檔案。
 
 ### 7.1 截圖要拍到什麼（拍不全＝白做）
@@ -180,8 +180,8 @@
 
 ### 7.2 在 502 這台開對話，把 prompt 和截圖一起貼進去
 
-1. 在 **502 這台**（就是放 `D:\fileserver_D\TradeReview\` 的那台）開 Claude 的對話視窗。
-2. 打開 `D:\fileserver_D\TradeReview\PROMPT_轉trades_all.md`，複製
+1. 在 **502 這台**（就是放 `C:\TradeReview\` 的那台）開 Claude 的對話視窗。
+2. 打開 `C:\TradeReview\PROMPT_轉trades_all.md`，複製
    「⬇⬇ 從這裡開始複製 ⬇⬇」到「⬆⬆ 複製到這裡結束 ⬆⬆」**中間的整段**（框線那兩行不要複製）。
 3. 把那整段貼進對話，**同一則訊息裡連同今天的截圖一起送出**（截圖可以多張）。
 4. 告訴它今天是哪一天（例如「這是 2026-07-27 早上抓的，美東交易日應該是 07-26」），
@@ -214,55 +214,19 @@
 或者自己下指令（效果一樣）：
 
 ```bash
-python D:\fileserver_D\TradeReview\cs_from_trades.py --date 2026-07-27 --open-bal 37874.49 --close-bal 37668.99
+python C:\TradeReview\cs_from_trades.py --date 2026-07-27 --open-bal 37874.49 --close-bal 37668.99
 ```
 
 看到 `🟢 全部檢核通過` 之後，再加 `--commit` 實際寫入：
 
 ```bash
-python D:\fileserver_D\TradeReview\cs_from_trades.py --date 2026-07-27 --open-bal 37874.49 --close-bal 37668.99 --commit
+python C:\TradeReview\cs_from_trades.py --date 2026-07-27 --open-bal 37874.49 --close-bal 37668.99 --commit
 ```
 
 出現 `🔴` → **停手交負責人，不要手動改數字硬湊**。
 
 > 為什麼第二段不需要 AI：買進沒有手續費，所以淨額可以從 trades_all 的價格與損益
 > **精確反推**（連每筆 1.54/1.55/1.56 的實際手續費都還原得出來），不是估算。
-
-### 7.5 沒有 502 那台可用時：改用**雲端 AI 純轉錄**（臨時帳號也行）
-
-臨時借別人的 AI 帳號、在別台電腦、只有手機——這些情況下 AI **碰不到 `trades_all.xlsx`**，
-7.2 那支 prompt 用不了。改用另一支：**`PROMPT_截圖轉CSV_雲端版.md`**。
-
-差別在於：它只叫 AI 做一件事——**把截圖上每一列原封不動打成 CSV 文字**，
-不換算時區、不合併拆單、不配對、不算損益。拿到 CSV 後存進 `_inbox\`，
-接下來走**跟 🅰 完全一樣的全自動路線**（雙擊一鍵檔）。
-
-- ✅ 任何聊天視窗都能做，不需要檔案權限
-- ✅ **攔錯能力比 7.2 那條還強**：引擎會逐列拿對帳單自己的 `BALANCE` 欄重建餘額，
-  中間漏一列、多一列、數字抄錯，都會當場指出是哪一列
-- ⚠️ 上傳截圖前**先把帳號那行遮掉／裁掉**，用完刪除對話
-- ⚠️ **一定要對「收盤餘額」**（見下）
-
-> 只要拿得到截圖，這條路其實比 7.2 更值得優先用。
-
-### 7.6 ⚠️ 任何「用截圖產生資料」的路線都必須做的一件事
-
-不管是 7.2（AI 寫 trades_all）、7.5（雲端轉錄）還是第 8 節（自己手抄），
-**做完都要對這兩個數字**：
-
-| 引擎印出的 | 要等於 |
-|---|---|
-| `開盤=` | 截圖裡 `BAL` 那列的餘額 |
-| `收盤=` | 截圖**最後一列**的 BALANCE |
-
-**為什麼**：實測過，若漏抄的是**最後幾列**、而且剛好是完整的一買一賣，
-引擎會**全綠放行、完全不報錯**（剩下的列自己算得通，收盤餘額就取到被截斷的那一列）。
-中間漏抄、中間插字、缺 BAL 列、格式寫錯——引擎都擋得下來，
-**只有「尾巴漏抄」擋不住**，只能靠人眼對這個數字。
-
-對不上 → 停手，交負責人。
-
----
 
 ---
 
@@ -297,7 +261,7 @@ DATE,TIME,TYPE,REF #,DESCRIPTION,Misc Fees,Commissions & Fees,AMOUNT,BALANCE
 - ⚠️ **跨午夜那幾列**（時間 `00:xx`、`01:xx`…）的 `DATE` 欄要寫**它們真正的日曆日**
   （通常是**隔一天**），**不要照抄券商畫面上的 Trade Date**。抄錯會整天差一天。
 
-抄完存成 `D:\fileserver_D\TradeReview\_inbox\YYYY-MM-DD.csv`（UTF-8），雙擊 `每日一鍵複盤.bat`。
+抄完存成 `C:\TradeReview\_inbox\YYYY-MM-DD.csv`（UTF-8），雙擊 `每日一鍵複盤.bat`。
 格式看不懂就打開範例檔對照：`_inbox6-07-22_23_example.csv`（裡面就有分批成交與跨午夜列）。
 
 ---
@@ -320,8 +284,8 @@ DATE,TIME,TYPE,REF #,DESCRIPTION,Misc Fees,Commissions & Fees,AMOUNT,BALANCE
 **交件時附上這兩個檔**（一鍵檔已自動幫你存好）：
 
 ```
-D:\fileserver_D\TradeReview\_logs\engine_last.txt
-D:\fileserver_D\TradeReview\_logs\writer_last.txt
+C:\TradeReview\_logs\engine_last.txt
+C:\TradeReview\_logs\writer_last.txt
 ```
 
 ### 特殊狀況：舊日期把今天擋住了
@@ -330,13 +294,13 @@ D:\fileserver_D\TradeReview\_logs\writer_last.txt
 而今天本身是乾淨的，就用「只跑今天」的方式繞過——在 PowerShell 執行：
 
 ```bash
-python D:\fileserver_D\TradeReview\spy_daytrade_engine.py D:\fileserver_D\TradeReview\_inbox\2026-07-27.csv --date 2026-07-27
+python C:\TradeReview\spy_daytrade_engine.py C:\TradeReview\_inbox\2026-07-27.csv --date 2026-07-27
 ```
 
 看全綠後再寫入：
 
 ```bash
-python D:\fileserver_D\TradeReview\spy_daytrade_writer.py D:\fileserver_D\TradeReview\_inbox\2026-07-27.csv --date 2026-07-27 --commit
+python C:\TradeReview\spy_daytrade_writer.py C:\TradeReview\_inbox\2026-07-27.csv --date 2026-07-27 --commit
 ```
 
 `--date` 填的是**美東交易日**（畫面上 `SESSION 2026-07-27` 顯示的那個日期）。
@@ -358,7 +322,6 @@ python D:\fileserver_D\TradeReview\spy_daytrade_writer.py D:\fileserver_D\TradeR
 ## 11. 做完的收尾檢查（30 秒）
 
 - [ ] 畫面最後有出現 `全部完成`，而且中間沒有任何 🔴
-- [ ] **若今天走的是截圖路線**（第 7、8 節）：引擎印的 `開盤=` / `收盤=` 已跟截圖的 BAL 列與最後一列 BALANCE 對過（見 7.6）
 - [ ] 瀏覽器 `http://localhost:5500` 打得開，切到當天看得到 K 線與交易線
 - [ ] 貼社群的總結行（格式如下，數字**從畫面上抄，不要自己算**）：
       ```
@@ -376,15 +339,14 @@ python D:\fileserver_D\TradeReview\spy_daytrade_writer.py D:\fileserver_D\TradeR
 
 | 東西 | 位置 |
 |---|---|
-| 一鍵執行 | `D:\fileserver_D\TradeReview\每日一鍵複盤.bat`（雙擊，或把 CSV 拖上去） |
-| 今天的 CSV 要放這 | `D:\fileserver_D\TradeReview\_inbox\YYYY-MM-DD.csv` |
-| 出事要交的紀錄 | `D:\fileserver_D\TradeReview\_logs\engine_last.txt`、`writer_last.txt` |
+| 一鍵執行 | `C:\TradeReview\每日一鍵複盤.bat`（雙擊，或把 CSV 拖上去） |
+| 今天的 CSV 要放這 | `C:\TradeReview\_inbox\YYYY-MM-DD.csv` |
+| 出事要交的紀錄 | `C:\TradeReview\_logs\engine_last.txt`、`writer_last.txt` |
 | Gmail 帳號 | `shuye1668@gmail.com` → **草稿**匣 |
 | 草稿主旨 | `[SPY-DayTrade-Autosend] YYYY-MM-DD` |
 | 兩本帳 | `trades_all.xlsx`、`CS交易紀錄.xlsx`（**可以看，看完不要存檔**） |
 | 怎麼跑（詳細） | `操作手冊.md` |
 | 只有截圖時要貼的 prompt | `PROMPT_轉trades_all.md`（在 **502 這台**開對話，連截圖一起貼） |
-| 只有截圖、又不在 502 這台 | `PROMPT_截圖轉CSV_雲端版.md`（純轉錄，任何 AI 帳號都能用） |
 | 手抄 CSV 的範例檔（最後手段） | `_inbox\2026-07-22_23_example.csv`（含分批成交與跨午夜列） |
 
 ## 附錄 B：名詞

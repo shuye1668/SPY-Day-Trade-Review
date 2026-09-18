@@ -3,7 +3,7 @@
 import os
 from PIL import Image, ImageDraw, ImageFont
 
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "決策樹.png")
+OUT = r"C:\TradeReview\決策樹.png"
 W, H = 1760, 2180
 BG = (255, 255, 255)
 
@@ -218,25 +218,24 @@ box(M, 1022, 520, 112, [
     ("BAL 行／全部 TRD 列／Misc Fees", f_body, INK),
     ("／BALANCE／午夜後那幾列都要拍到", f_small, MUTE),
 ], AMBER, AMBER_BG, tag="⑤", tagcol=AMBER)
-vline(M, 1078, 1128)
+vline(M, 1078, 1122)
 
 # ⑥ 貼 prompt
-box(M, 1250, 820, 232, [
-    ("⑥ 在 502 這台（放 D:\\fileserver_D\\TradeReview\\ 的那台）", f_node, INK),
+box(M, 1250, 760, 190, [
+    ("⑥ 在 502 這台（放 C:\\TradeReview\\ 的那台）", f_node, INK),
     ("開 Claude 對話，貼 PROMPT_轉trades_all.md", f_node, INK),
     ("整段 ＋ 截圖  （第 7 節）", f_body, INK),
     ("→ AI 更新 trades_all.xlsx", f_body, GREEN),
     ("→ 並回報「期初餘額／收盤餘額」兩個數字", f_body, GREEN),
-    ("不在這台 → 改用 PROMPT_截圖轉CSV_雲端版.md（7.5）", f_small, AMBER),
 ], AMBER, AMBER_BG, tag="⑥ 標準做法", tagcol=AMBER)
 
 # ⑥ → ⑧ 手抄
-d.line([(1290, 1250), (1360, 1250)], fill=LINE, width=3)
-d.line([(1360, 1250), (1360, 1387)], fill=LINE, width=3)
-head(1360, 1387, 0, 1, LINE)
+d.line([(1260, 1250), (1360, 1250)], fill=LINE, width=3)
+d.line([(1360, 1250), (1360, 1353)], fill=LINE, width=3)
+head(1360, 1353, 0, 1, LINE)
 label(1300, 1196, "AI 也不能用", RED, anchor="l")
 
-box(1420, 1452, 470, 130, [
+box(1420, 1418, 470, 130, [
     ("⑦ 逐列手抄成 CSV", f_node, INK),
     ("（第 8 節・最後手段）", f_body, RED),
     ("抄錯不用怕：引擎逐列驗餘額會擋下", f_small, MUTE),
@@ -247,14 +246,14 @@ MERGE_Y = 1560
 d.line([(L, 966), (L, MERGE_Y)], fill=LINE, width=3)
 d.line([(L, MERGE_Y), (M - 340, MERGE_Y)], fill=LINE, width=3)
 d.line([(M, 1345), (M, MERGE_Y)], fill=LINE, width=3)
-d.line([(1420, 1517), (1420, MERGE_Y)], fill=LINE, width=3)
+d.line([(1420, 1483), (1420, MERGE_Y)], fill=LINE, width=3)
 d.line([(1420, MERGE_Y), (M + 340, MERGE_Y)], fill=LINE, width=3)
 d.line([(M - 340, MERGE_Y), (M + 340, MERGE_Y)], fill=LINE, width=3)
 vline(M, MERGE_Y, 1622)
 
 # ★ 一鍵檔
 box(M, 1728, 940, 176, [
-    ("★  雙擊  D:\\fileserver_D\\TradeReview\\每日一鍵複盤.bat", f_node, INK),
+    ("★  雙擊  C:\\TradeReview\\每日一鍵複盤.bat", f_node, INK),
     ("", f_small, INK),
     ("手上有 CSV（③ 或 ⑦）→ 它自己挑檔、自己跑完", f_body, INK),
     ("只有 trades_all 更新了（⑥）→ 選單選 2，輸入 交易日／期初／收盤", f_body, INK),

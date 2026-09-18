@@ -18,11 +18,9 @@ Bloomberg G Chart Trade Review — 本地 Python 版（不需要 BQNT）
 # ============================================================
 # CONFIG — 每天只改這裡
 # ============================================================
-import os as _os
-_BASE = _os.path.dirname(_os.path.abspath(__file__))
-TRADE_EXCEL_PATH = _os.path.join(_BASE, "data", "trades.xlsx")    # 你的交易紀錄 Excel
+TRADE_EXCEL_PATH = r"C:\TradeReview\data\trades.xlsx"    # 你的交易紀錄 Excel
 TRADE_DATE       = "2026-04-01"                          # 交易日期 YYYY-MM-DD
-OUTPUT_PNG       = _os.path.join(_BASE, "output", "20260401.png")   # 輸出 PNG 路徑
+OUTPUT_PNG       = r"C:\TradeReview\output\20260401.png"   # 輸出 PNG 路徑
 TICKER           = "SPY US Equity"
 
 # 市場概述文字框（留空 "" 則不顯示）
