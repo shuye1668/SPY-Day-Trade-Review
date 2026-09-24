@@ -121,6 +121,29 @@ powershell -ExecutionPolicy Bypass -File sync_push.ps1 -Owner p502   # 推出 CS
 於是資料夾裡只要躺著一個沒進 git 的檔（例如 `_inbox\2026-08-11.csv`），
 就會每天 exit 2 靜默跳過 —— 無人看管下等於同步永久停擺。**不要改回去。**
 
+### 回歸閘門：自動推送不得靜默大倒退（2026-09-24 加）
+
+**事故**：2026-09-18 18:00 的 `TradeReview_SyncPush_p502` 把一批搬家前
+（`C:\TradeReview`，2026-07-27 以前）的舊檔當成正常變更提交並推送。有人把舊備份
+複製進 D 槽資料夾，排程忠實地把倒退推了上去：
+
+| 檔案 | 損失 |
+|---|---|
+| `trade_review_app.py` | 3615 → 2914 行（補 K 線／行事曆／徽章／`_atomic_to_excel`／`_file_lock` 全失） |
+| `CS交易紀錄.xlsx` | 64,878 → 36,757 bytes（帳本少 43%） |
+| `spy_daytrade_engine/writer`、`cs_from_trades`、`CLAUDE.md` | 全數退版 |
+| `history_minute.xlsx`（不進 git） | 被換成只到 07-28 的備份，7/29~9/8 共 29 個交易日消失 |
+
+**對策**：`sync_push.ps1` 在 commit 前檢查
+（① 文字檔刪除 ≥300 行且刪除 > 新增×5 ② 任一 `.xlsx` 縮水 >25%），
+命中即 `git reset` 取消 stage、`exit 3`、不 commit 不 push。
+人工確認無誤才用 `-Force` 繞過；**排程一律不得帶 `-Force`**。
+
+⚠️ 帳本大小一律用 **git blob SHA** 比對，不碰檔名。PowerShell 5.1 以 ANSI(cp950)
+解讀 git 的 UTF-8 輸出，`CS交易紀錄.xlsx` 會被讀成亂碼，用檔名去 `Get-Item` /
+`cat-file` 必定查無此檔、大小算成 0 —— 閘門就對**最該保護的那本帳**靜默失效。
+第一版正是這樣壞的，實測才揪出來。**不要改成用檔名。**
+
 ### 三個容易踩的環境陷阱（都已在腳本內處理，改動時勿破壞）
 
 1. **Boss PC 的 ExecutionPolicy 全 scope 為 Undefined（實際 = Restricted）**，
@@ -236,6 +259,23 @@ App 內建 `candle-refresher` daemon 執行緒：每 60 分鐘把最近 7 個日
 3. **每輪清掉該日的 `_negative_cache`**，但用 `REFRESH_MAX_ATTEMPTS=3` 收斂。
    常駐 app 下，一次網路抖動會讓那天在整個 process 生命週期內不再重試；
    而假日若無上限則會每小時空敲 yfinance。
+
+### 破洞掃描（2026-09-24 加）
+
+補 K 線只回看 7 天，所以它只保證「最新那天在不在」。2026-09-18 的舊備份覆蓋
+在檔案**中間**挖掉 7/29~9/8 共 29 天，補 K 線從 9/9 起每天正常補新的、卻永遠
+碰不到那段 —— 破洞存在兩週都沒被發現。
+
+`_scan_gaps()` 每輪掃最近 `GAP_SCAN_DAYS=120` 天，缺漏寫進日誌、進 `/api/version`，
+標頭徽章轉紅「✕K線缺 N 天」。
+
+`KNOWN_MISSING_SESSIONS`（目前 2026-06-12、06-15）是已知永遠補不回的日子，
+刻意排除在外：**永遠紅的警示等於沒有警示**，真正的破洞會被當雜訊忽略。
+要新增項目前先確認真的救不回。
+
+> 復原來源：公開快照 **spy-intraday-chart**（GitHub Pages）保有每日 candles JSON，
+> 2026-09-24 那 29 天就是從它補回的，已逐分鐘 OHLC 比對確認與本機來源一致。
+> 它不只是對外網頁，實際上是 `history_minute.xlsx` 唯一的異地備份。
 
 ### 美股行事曆與「安靜要能被證明」（2026-09-08 加）
 

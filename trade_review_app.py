@@ -3221,6 +3221,16 @@ function renderCandleBadge(c){
   if(!el)return;
   if(!c||c.error){el.style.display="none";return;}
   el.style.display="";
+  if(c.gap_count){
+    el.style.color="#FF4444";
+    el.textContent=`✕K線缺 ${c.gap_count} 天`;
+    el.title=`股價線有破洞：近期有 ${c.gap_count} 個交易日沒有 K 線。
+`
+            +`缺漏：${(c.gaps||[]).join(", ")}
+`
+            +`常見原因是舊備份被複製進資料夾覆蓋了現況。`;
+    return;
+  }
   if(c.up_to_date){
     el.style.color="#6B7280";
     el.textContent=`K線最新 ${c.expected}`;
@@ -3494,6 +3504,37 @@ def _rlog(msg):
 _refresh_status = {"checked_at": None, "expected": None, "have_expected": None,
                    "added": [], "missing": [], "closed_today": None}
 
+GAP_SCAN_DAYS = 120      # 破洞掃描範圍（日曆日）
+
+# 已知且永遠補不回來的交易日：yfinance 的 1 分鐘資料只回溯約 30 天，這兩天在
+# 發現時早就超出範圍，公開快照 spy-intraday-chart 也同樣沒有。
+# 明確列出來，是為了不讓徽章長年紅著 —— 永遠紅的警示等於沒有警示，
+# 真正的破洞反而會被當成背景雜訊忽略掉。新增項目前請先確認真的救不回。
+KNOWN_MISSING_SESSIONS = {"2026-06-12", "2026-06-15"}
+
+def _scan_gaps(days=GAP_SCAN_DAYS):
+    """掃出最近 N 個日曆日內「應該有卻沒有」的交易日。
+
+    為什麼需要（2026-09-24 加）：2026-09-18 有人把搬家前的舊備份複製進資料夾，
+    history_minute.xlsx 被換成只到 2026-07-28 的版本，等於 7/29~9/8 共 29 個交易日
+    憑空消失。補 K 線只回看 7 天，所以它從 9/9 起每天正常補新的、卻永遠碰不到那段
+    —— 破洞在檔案中間存在了兩週都沒人發現。只看「最新那天在不在」是抓不到的。
+    """
+    now = _et_now()
+    latest = _latest_session(now)
+    try:
+        hist = _load_history_by_date()
+    except Exception:
+        return []
+    gaps = []
+    d = latest
+    for _ in range(days):
+        ds = d.strftime("%Y-%m-%d")
+        if not _closed_reason(d) and not hist.get(ds) and ds not in KNOWN_MISSING_SESSIONS:
+            gaps.append(ds)
+        d -= dt.timedelta(days=1)
+    return sorted(gaps)
+
 def candle_currency():
     """回答「K 線資料到底是不是最新的」—— 這是本次改動的重點。
 
@@ -3509,7 +3550,9 @@ def candle_currency():
     except Exception:
         latest, ok = None, False
     today_reason = _closed_reason(now.date())
-    return {"expected": expected, "latest": latest, "up_to_date": ok,
+    gaps = _scan_gaps()
+    return {"expected": expected, "latest": latest, "up_to_date": ok and not gaps,
+            "gaps": gaps[:40], "gap_count": len(gaps),
             "today_et": now.strftime("%Y-%m-%d"),
             "today_closed_reason": today_reason,
             "checked_at": _refresh_status.get("checked_at"),
@@ -3555,6 +3598,10 @@ def _refresh_recent_candles():
         _rlog(f"[refresh] {dt.datetime.now():%m-%d %H:%M} 已補 K 線：{', '.join(added)}")
     else:
         why = f"；美東今日 {cur['today_et']} {cur['today_closed_reason']}休市"               if cur["today_closed_reason"] else ""
+        if cur.get("gap_count"):
+            g = cur["gaps"]
+            _rlog(f"[refresh] 🔴 近 {GAP_SCAN_DAYS} 日內有 {cur['gap_count']} 個交易日缺 K 線："
+                  f"{g[0]} ~ {g[-1]}（可能是舊備份覆蓋，見 CLAUDE.md §五）")
         _rlog(f"[refresh] {dt.datetime.now():%m-%d %H:%M} 無需補件"
               f"（最新已收盤交易日 {cur['expected']} 已在檔){why}"
               + (f"；仍缺 {', '.join(missing)}" if missing else ""))
