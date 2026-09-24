@@ -2,7 +2,7 @@
 Daily Fetch — yfinance edition
 ==============================
 Pulls SPY 1-minute candles from Yahoo Finance and saves them as JSON
-into C:\\TradeReview\\candles\\
+into D:\\fileserver_D\\TradeReview\\candles\\
 
 Behavior:
   • Default mode: fetch today's session only (after market close)
@@ -16,7 +16,7 @@ Setup:
 
 Schedule (Windows Task Scheduler):
   Run daily at 16:30 ET → maps to 04:30 (winter) / 05:30 (summer) Taipei time
-  Action: python  C:\\TradeReview\\daily_fetch.py --catchup
+  Action: python  D:\\fileserver_D\\TradeReview\\daily_fetch.py --catchup
   ALSO: trigger "At log on" with same command, so missed days are recovered when
         you turn the PC back on.
 """
@@ -24,7 +24,8 @@ import datetime as dt
 import os, json, sys, argparse, time
 
 # ── Config ──────────────────────────────────────────────────────────────────
-CANDLES_FOLDER = r"C:\TradeReview\candles"
+_BASE = os.path.dirname(os.path.abspath(__file__))
+CANDLES_FOLDER = os.path.join(_BASE, "candles")
 TICKER = "SPY"
 # ────────────────────────────────────────────────────────────────────────────
 

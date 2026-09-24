@@ -1,4 +1,4 @@
-"""One-time builder for C:\\TradeReview\\history_minute.xlsx
+"""One-time builder for D:\\fileserver_D\\TradeReview\\history_minute.xlsx
 
 Merges:
   1. Existing history_minute.xlsx (user's own records, e.g. 2025/4/29 - 2026/3/18)
@@ -21,7 +21,8 @@ Requirements:
 import os, sys, argparse, datetime as dt
 import pandas as pd
 
-HISTORY_FILE = r"C:\TradeReview\history_minute.xlsx"
+_BASE = os.path.dirname(os.path.abspath(__file__))
+HISTORY_FILE = os.path.join(_BASE, "history_minute.xlsx")
 TICKER = "SPY"
 
 

@@ -9,7 +9,7 @@ Reads trades from a single consolidated Excel file `trades_all.xlsx`
 with a Date column — same file shared with trade_review_app_free.py.
 
 Folder layout:
-  C:\\TradeReview\\
+  D:\\fileserver_D\\TradeReview\\
     trades_all.xlsx           ← all trades, with Date column (YYYY-MM-DD)
     notes\\
       2026-04-08.txt          ← per-day notes
@@ -30,10 +30,28 @@ DIVIDENDS_FILE=_os.path.join(ROOT_FOLDER,"dividends.xlsx")
 TICKER="SPY US Equity"
 PORT=5500
 
-import datetime as dt,json,os,glob,warnings
+import datetime as dt,json,os,glob,warnings,sys,logging,time
 warnings.filterwarnings("ignore")
 import pandas as pd,numpy as np
 from flask import Flask,jsonify,request
+
+# 2026-07-31：pythonw.exe（背景靜默、無主控台）下 sys.stdout/stderr 為 None，
+# 本檔多處 print() 與 Flask/werkzeug 請求日誌會丟例外 → 背景常駐秒退（表面像沒常駐）。
+# 對策：無 console 時把 stdout/stderr 導向 _logs\trade_review_app.log，並降低 werkzeug 日誌量。
+def _pythonw_safe_streams():
+    if sys.stdout is None or sys.stderr is None:
+        try:
+            _ld=os.path.join(ROOT_FOLDER,"_logs"); os.makedirs(_ld,exist_ok=True)
+            _fh=open(os.path.join(_ld,"trade_review_app.log"),"a",encoding="utf-8",errors="backslashreplace")
+            if sys.stdout is None: sys.stdout=_fh
+            if sys.stderr is None: sys.stderr=_fh
+        except Exception:
+            import io
+            if sys.stdout is None: sys.stdout=io.StringIO()
+            if sys.stderr is None: sys.stderr=io.StringIO()
+_pythonw_safe_streams()
+try: logging.getLogger("werkzeug").setLevel(logging.WARNING)
+except Exception: pass
 
 # Local history file (user-provided minute bars, EDT timestamps).
 # Format: Excel with columns Date, Open, High, Low, Close, Volume
@@ -209,10 +227,65 @@ def _fetch_yfinance_minute(ticker, date_str):
     return bars
 
 
+def _atomic_to_excel(df, path):
+    """Write df to path atomically: full temp file first, then os.replace().
+
+    to_excel() writes in place, so a second process (or a crash) mid-write leaves a
+    truncated zip — the file is then unrecoverable, not merely stale. That is exactly
+    how history_minute.xlsx was destroyed on 2026-08-10: two app instances appended
+    the same 4.4 MB workbook concurrently and shredded xl/worksheets/sheet1.xml.
+    os.replace() is atomic on the same volume, so readers only ever see a complete file.
+    """
+    # 副檔名必須留 .xlsx —— pandas 由副檔名決定 writer engine
+    tmp = f"{path}.{os.getpid()}.tmp.xlsx"
+    try:
+        df.to_excel(tmp, index=False)
+        os.replace(tmp, path)
+    finally:
+        try:
+            if os.path.exists(tmp): os.remove(tmp)
+        except OSError:
+            pass
+
+
+def _file_lock(path, stale_seconds=300):
+    """Best-effort cross-process lock via O_EXCL lock file. Returns fd or None.
+
+    Guards whole-file xlsx rewrites against a second app instance (scheduled task +
+    a manually started copy is a normal situation here, and both write these files).
+    """
+    lock = path + ".lock"
+    try:
+        age = time.time() - os.path.getmtime(lock)
+        if age > stale_seconds:
+            os.remove(lock)
+    except OSError:
+        pass
+    try:
+        return os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except OSError:
+        return None
+
+
+def _file_unlock(path, fd):
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    try:
+        os.remove(path + ".lock")
+    except OSError:
+        pass
+
+
 def _append_to_history(ticker, date_str, bars):
     """Append new bars to history_minute.xlsx. Creates file if missing.
     Skips if date_str already exists in file (avoid duplicates)."""
     if not bars: return
+    fd = _file_lock(HISTORY_FILE)
+    if fd is None:
+        print(f"[history] append skipped for {date_str}: another process is writing")
+        return
     try:
         # Build rows for this date
         new_rows = []
@@ -236,7 +309,7 @@ def _append_to_history(ticker, date_str, bars):
         else:
             combined = new_df
             os.makedirs(os.path.dirname(HISTORY_FILE), exist_ok=True)
-        combined.to_excel(HISTORY_FILE, index=False)
+        _atomic_to_excel(combined, HISTORY_FILE)
         # Invalidate cache so next read picks up new data
         _history_cache["mtime"] = None
         print(f"[history] appended {len(new_rows)} bars for {date_str} → {HISTORY_FILE}")
@@ -244,6 +317,8 @@ def _append_to_history(ticker, date_str, bars):
         print(f"[history] write FAILED: {HISTORY_FILE} is open in Excel")
     except Exception as e:
         print(f"[history] append failed for {date_str}: {e}")
+    finally:
+        _file_unlock(HISTORY_FILE, fd)
 
 # Cache the loaded trades DataFrame; reload if file mtime changes
 _trades_cache={"mtime":None,"df":None}
@@ -665,16 +740,28 @@ def _analyse_all_trades():
                 _any_changed = True
 
     # Only write back if something changed (avoid unnecessary IO + mtime churn)
-    if _any_changed or _rows_merged or _date_col_dirty:
-        try:
-            for col in ("Action", "Status", "Pair_Date", "Pair_Time"):
-                df[col] = df[col].astype(object).fillna("")
-            df.to_excel(TRADES_FILE, index=False)
-            print(f"[analyse_all] wrote merged DataFrame ({len(df)} rows) to {TRADES_FILE}")
-        except PermissionError:
-            print(f"[analyse_all] write-back FAILED: trades_all.xlsx is open in Excel — close it and refresh")
-        except Exception as e:
-            print(f"[analyse_all] write-back skipped: {type(e).__name__}: {e}")
+    # ...and never while spy_daytrade_writer holds the lock: openpyxl's save is not
+    # atomic, so a concurrent write-back would clobber it (or be clobbered). Skipping
+    # is safe — the writer's save bumps mtime, which re-triggers this analysis and the
+    # write-back then happens with the lock released.
+    if _writer_active() and (_any_changed or _rows_merged or _date_col_dirty):
+        print("[analyse_all] write-back skipped: .writer.lock held by writer")
+    elif _any_changed or _rows_merged or _date_col_dirty:
+        fd = _file_lock(TRADES_FILE)
+        if fd is None:
+            print("[analyse_all] write-back skipped: another process is writing trades_all")
+        else:
+            try:
+                for col in ("Action", "Status", "Pair_Date", "Pair_Time"):
+                    df[col] = df[col].astype(object).fillna("")
+                _atomic_to_excel(df, TRADES_FILE)
+                print(f"[analyse_all] wrote merged DataFrame ({len(df)} rows) to {TRADES_FILE}")
+            except PermissionError:
+                print(f"[analyse_all] write-back FAILED: trades_all.xlsx is open in Excel — close it and refresh")
+            except Exception as e:
+                print(f"[analyse_all] write-back skipped: {type(e).__name__}: {e}")
+            finally:
+                _file_unlock(TRADES_FILE, fd)
 
     by_date = {}
     for t in trades_out:
@@ -689,6 +776,25 @@ def _analyse_all_trades():
     return by_date
 
 
+WRITER_LOCK = _os.path.join(ROOT_FOLDER, ".writer.lock")
+_STALE_LOCK_SECONDS = 600   # writer 正常執行是秒級；逾時代表被強制中斷後殘留
+
+def _writer_active():
+    """spy_daytrade_writer 是否正持有寫入鎖。
+
+    殘留鎖必須逾時失效，否則 writer 一次被強制中斷就會讓常駐 app 永遠不再回寫
+    配對結果，而且完全沒有徵兆。
+    """
+    try:
+        age = time.time() - os.path.getmtime(WRITER_LOCK)
+    except OSError:
+        return False
+    if age > _STALE_LOCK_SECONDS:
+        print(f"[analyse_all] ignoring stale .writer.lock ({age:.0f}s old)")
+        return False
+    return True
+
+
 def read_and_pair_for_date(date_str):
     """Return trades for a given date using the cross-day LIFO analysis."""
     by_date = _analyse_all_trades()
@@ -699,6 +805,39 @@ app=Flask(__name__)
 # Preload history file at startup so first request doesn't wait
 _load_history_by_date()
 
+@app.after_request
+def _add_no_cache(resp):
+    # Force browsers to revalidate every request so external file edits show up
+    # on refresh (previously JSON/HTML got heuristically cached → had to restart app).
+    resp.headers["Cache-Control"]="no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"]="no-cache"
+    resp.headers["Expires"]="0"
+    return resp
+
+SYNC_STATE_FILE=_os.path.join(ROOT_FOLDER,"sync_state.json")
+
+@app.route("/api/version")
+def api_version():
+    """Return data-file mtimes so the client can auto-detect edits and reload.
+
+    Also returns sync freshness: Boss PC writes sync_state.json after each run and
+    it travels with the git sync. Without this, a failed push looks exactly like
+    "market hasn't opened yet" — the UI must be able to tell those apart (CLAUDE §0).
+    """
+    def _mt(p):
+        try:return os.path.getmtime(p)
+        except:return 0
+    sync=None
+    try:
+        with open(SYNC_STATE_FILE,encoding="utf-8") as f:sync=json.load(f)
+    except Exception:pass
+    # K 線新鮮度：交易帳與股價線是兩條獨立的鏈，任一條停掉都必須看得出來。
+    # 2026-09-08 加：9/7 勞動節休市時，使用者無法分辨「正確」與「壞掉」。
+    candles=None
+    try:candles=candle_currency()
+    except Exception as e:candles={"error":f"{type(e).__name__}: {e}"}
+    return jsonify({"trades":_mt(TRADES_FILE),"sync":sync,"candles":candles})
+
 @app.route("/")
 def index():return HTML
 
@@ -708,18 +847,23 @@ def api_colors():
 
 @app.route("/api/dates")
 def api_dates():
-    """Return all dates that appear in trades_all.xlsx Date column OR in history_minute.xlsx."""
-    dates=set()
+    """Return all selectable dates, and which of them have no K-line data.
+
+    A handful of dates exist in trades_all but not in history_minute (e.g. 2026-06-12,
+    2026-06-15 — too old for yfinance to backfill). They are still listed, because the
+    trades are worth seeing, but the client marks them so picking one is never a
+    surprise: jumpTo() silently walks backwards to the nearest day with candles.
+    """
+    tdates=set()
     df=load_trades_df()
     if df is not None and "Date" in df.columns:
         for v in df["Date"].dropna().unique():
             nd=_norm_date(v)
-            if nd:dates.add(nd)
-    # Also include dates from history_minute.xlsx (so user can jump to any date with K-line data)
+            if nd:tdates.add(nd)
     hist=_load_history_by_date()
-    for d in hist.keys():
-        dates.add(d)
-    return jsonify(sorted(dates,reverse=True))
+    hdates=set(hist.keys())
+    return jsonify({"dates":sorted(tdates|hdates,reverse=True),
+                    "no_candles":sorted(tdates-hdates,reverse=True)})
 
 @app.route("/api/data")
 def api_data():
@@ -752,28 +896,53 @@ HTML=r"""<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="UTF-8">
 <title>Trade Review</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:#000;color:#C0C4CC;font-family:'Consolas','Courier New',monospace;overflow:hidden;height:100vh}
-#hdr{height:26px;display:flex;align-items:center;padding:0 12px;background:#0D0F13;border-bottom:1px solid #1A1D22}
+/* flex column：不再用 calc(100vh - 56px - 105px) 那種寫死高度。
+   工具列一改高度、或瀏覽器字級縮放，寫死的數字就會讓畫布跟容器對不齊。 */
+body{background:#000;color:#C0C4CC;font-family:'Consolas','Courier New',monospace;overflow:hidden;height:100vh;display:flex;flex-direction:column}
+#hdr{height:26px;flex:0 0 auto;display:flex;align-items:center;padding:0 12px;background:#0D0F13;border-bottom:1px solid #1A1D22}
 #hdr .tk{color:#FFF;font-weight:bold;font-size:13px}
 #hdr .lbl{margin-left:auto;background:#FF8C00;color:#000;font-weight:bold;font-size:11px;padding:2px 10px;border-radius:2px}
-#tb{height:30px;display:flex;align-items:center;gap:8px;padding:0 12px;background:#0A0C0F;border-bottom:1px solid #1A1D22;font-size:12px}
-#tb button{background:#1A1D22;color:#8B8F98;border:1px solid #333640;padding:2px 12px;cursor:pointer;font-family:inherit;font-size:11px;border-radius:2px}
-#tb button:hover{background:#252830;color:#FFF}
-#di{background:#000;color:#FF8C00;border:1px solid #333640;font-family:inherit;font-size:13px;font-weight:bold;width:110px;text-align:center;padding:2px 4px;border-radius:2px}
-#di:focus{border-color:#FF8C00;outline:none}
+/* flex-shrink:0 + nowrap — without them the P&L / trade-count labels get squeezed
+   to a fraction of their text width and visually overlap each other, and the
+   Export button is clipped off the right edge, below ~950px wide. */
+#tb{height:38px;flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:0 12px;background:#0A0C0F;border-bottom:1px solid #1A1D22;font-size:12px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
+#tb::-webkit-scrollbar{height:0}
+#tb>*{flex:0 0 auto;white-space:nowrap}
+/* 對比：原本 #8B8F98 on #1A1D22 約 4.4:1、字 11px 又矮，長時間看很吃力。
+   提到 #D4D9E0 約 11:1，字級與點擊區一併放大。 */
+#tb button{background:#20242B;color:#D4D9E0;border:1px solid #3D434E;padding:5px 13px;cursor:pointer;font-family:inherit;font-size:12px;font-weight:bold;border-radius:3px;line-height:1.2}
+#tb button:hover{background:#2E343D;border-color:#5A6270;color:#FFF}
+#tb button:active{background:#3A414C}
+#tb button:focus-visible{outline:2px solid #FF8C00;outline-offset:1px}
+#tb button:disabled{opacity:.4;cursor:default}
+#tb button:disabled:hover{background:#20242B;color:#D4D9E0;border-color:#3D434E}
+/* 年月日三格 —— 一般日期輸入的習慣：分段、可各自打數字、滿位自動跳下一格 */
+#dbox{display:flex;align-items:center;background:#000;border:1px solid #3D434E;border-radius:3px 0 0 3px;padding:2px 4px}
+#dbox.focus{border-color:#FF8C00}
+.dseg{background:transparent;color:#FF8C00;border:none;outline:none;font-family:inherit;
+      font-size:14px;font-weight:bold;text-align:center;padding:3px 1px;letter-spacing:.5px}
+#dY{width:44px}#dM{width:26px}#dD{width:26px}
+.dseg:focus{background:#2C5A8A;color:#FFF;border-radius:2px}
+.dsep{color:#5A6270;font-size:14px;font-weight:bold;user-select:none}
 .pnl{font-weight:bold;font-size:13px;margin-left:12px}.pnl.w{color:#FFF}.pnl.l{color:#FF4444}
 .tc{color:#8B8F98;font-size:11px}
 #zc{margin-left:auto;display:flex;gap:4px;align-items:center}
-.ind-toggles{display:flex;gap:2px;margin-left:8px;align-items:center}
-.ind-btn{background:#2A2E35;color:#666;border:1px solid #3A3E48;border-radius:3px;padding:1px 6px;font-size:11px;cursor:pointer;font-family:Consolas,monospace;line-height:1.4}
-.ind-btn.on{background:#3A4A5A;color:#E0E0E0;border-color:#5A6A7A}
-#cvsel{margin-left:10px;background:#1a1d24;color:#ccc;border:1px solid #3a3d44;padding:3px 6px;font-size:12px;border-radius:3px;cursor:pointer}
+.ind-toggles{display:flex;gap:3px;margin-left:8px;align-items:center}
+/* 原本 #666 on #2A2E35 只有 2.4:1，關閉狀態幾乎看不見；開/關也難分辨 */
+/* 必須用 #tb 前綴：上面的 `#tb button` 是 ID 選擇器，特異性高於單純的
+   class，否則 .on 的藍底會被它蓋掉，開/關看起來一模一樣。 */
+#tb .ind-btn{background:#20242B;color:#9AA3B0;border:1px solid #3D434E;border-radius:3px;padding:4px 9px;font-size:12px;font-weight:bold;cursor:pointer;font-family:Consolas,monospace;line-height:1.2}
+#tb .ind-btn:hover{background:#2E343D;color:#E6EAF0}
+#tb .ind-btn.on{background:#2C5A8A;color:#FFF;border-color:#5A9BD8}
+#tb .ind-btn.on:hover{background:#356BA3;color:#FFF}
+#cvsel{margin-left:10px;background:#20242B;color:#D4D9E0;border:1px solid #3D434E;padding:5px 7px;font-size:12px;border-radius:3px;cursor:pointer;font-family:inherit}
+#cvsel:hover{border-color:#5A6270}
 #legend{display:inline-flex;gap:10px;margin-left:10px;font-size:12px;align-items:center}
 #legend .sw{display:inline-block;width:12px;height:12px;margin-right:4px;vertical-align:middle;border:1px solid #555}
-#zc button{font-size:13px;padding:2px 10px}
-#cc{position:relative;width:100%;height:calc(100vh - 56px - 105px)}
+#zc button{font-size:14px;padding:5px 12px;min-width:34px}
+#cc{position:relative;width:100%;flex:1 1 auto;min-height:0}
 canvas{display:block;width:100%;height:100%}
-#tb2{height:105px;background:#0A0C0F;border-top:1px solid #1A1D22;display:flex;align-items:stretch;overflow-x:auto;padding:6px 12px;gap:6px}
+#tb2{height:105px;flex:0 0 auto;background:#0A0C0F;border-top:1px solid #1A1D22;display:flex;align-items:stretch;overflow-x:auto;padding:6px 12px;gap:6px}
 .tc2{flex:0 0 auto;min-width:130px;background:#0D0F13;border:1px solid #1A1D22;border-radius:4px;padding:6px 10px;font-size:11px;display:flex;flex-direction:column;justify-content:center;transition:border-color .15s,box-shadow .15s}
 .tc2 .dr{color:#8B8F98;margin-bottom:3px}.tc2 .pv{font-weight:bold;font-size:14px}
 .tc2 .pv.w{color:#FFF}.tc2 .pv.l{color:#FF4444}.tc2 .dt{color:#888;font-size:10px;margin-top:2px}
@@ -795,13 +964,52 @@ canvas{display:block;width:100%;height:100%}
 #ned textarea{width:100%;height:180px;background:#000;color:#E0E0E0;border:1px solid #3A3E48;border-radius:4px;padding:10px;font-family:inherit;font-size:12px;resize:vertical;line-height:1.6}
 #ned button{background:#3D6FCC;color:#FFF;border:none;border-radius:4px;padding:6px 24px;cursor:pointer;font-family:inherit;font-size:12px;margin-top:12px}
 #ld{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#FF8C00;font-size:14px;z-index:50;display:none}
-.hint{position:fixed;bottom:6px;right:12px;color:#333;font-size:10px;z-index:10}
+/* Was position:fixed bottom:6px in #333 — that sat ON TOP of the trade-card bar
+   and at ~1.5:1 contrast was effectively invisible. Now it lives in the header
+   strip, which has spare room, at a legible grey. */
+/* 日期選擇器：年月日三格 + 迷你日曆 */
+#dwrap{position:relative;display:flex;align-items:center}
+#dtog{background:#20242B;color:#D4D9E0;border:1px solid #3D434E;border-left:none;
+      border-radius:0 3px 3px 0;padding:5px 9px;font-size:13px;cursor:pointer;line-height:1.2}
+#dtog:hover{background:#2E343D;color:#FFF}
+
+/* position:fixed 且掛在 <body> 底下 —— 不能放進 #tb 裡面。
+   #tb 有 overflow-y:hidden（為了讓工具列在窄視窗橫向捲動），
+   任何絕對定位的彈出層只要是它的子孫，超出工具列高度的部分就會被整個裁掉，
+   結果是「日曆有開，但完全看不見」。 */
+#dcal{display:none;position:fixed;z-index:200;
+      background:#12151A;border:1px solid #3D434E;border-radius:5px;padding:8px;
+      box-shadow:0 8px 24px rgba(0,0,0,.65);user-select:none}
+#dcal.show{display:block}
+#dcal .cal-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;gap:6px}
+#dcal .cal-hd .ttl{color:#E6EAF0;font-size:13px;font-weight:bold;min-width:96px;text-align:center}
+#dcal .cal-nav{background:#20242B;color:#D4D9E0;border:1px solid #3D434E;border-radius:3px;
+               width:26px;height:24px;font-size:13px;cursor:pointer;line-height:1;padding:0}
+#dcal .cal-nav:hover{background:#2E343D;color:#FFF}
+#dcal table{border-collapse:separate;border-spacing:2px}
+#dcal th{color:#7A8290;font-size:11px;font-weight:normal;width:30px;padding:2px 0}
+#dcal th.we{color:#5A6270}
+#dcal td{width:30px;height:26px;text-align:center;font-size:12px;border-radius:3px;
+         color:#3A4048;                    /* 預設＝非交易日，明顯壓暗 */
+         cursor:default}
+#dcal td.has{color:#D4D9E0;background:#20242B;cursor:pointer;font-weight:bold}  /* 有 K 線＝可點 */
+#dcal td.has:hover{background:#2E343D;color:#FFF}
+#dcal td.nok{color:#C08A3E;background:#241E14;cursor:pointer}   /* 有交易但無 K 線 */
+#dcal td.nok:hover{background:#33291B;color:#E0A860}
+#dcal td.cur{background:#FF8C00;color:#000}
+#dcal td.today{outline:1px solid #5A6270}
+#dcal .cal-ft{margin-top:6px;color:#7A8290;font-size:10px;text-align:center;line-height:1.5}
+#dcal .cal-ft b{color:#D4D9E0}
+#dlist .di-empty{padding:10px 12px;font-size:12px;color:#7A8290}
+.hint{margin-left:20px;color:#6B7280;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#cdlbadge{margin-left:auto;margin-right:12px;font-size:11px;font-weight:bold;white-space:nowrap;cursor:default}
+#syncbadge{margin-right:14px;font-size:11px;font-weight:bold;white-space:nowrap;cursor:default}
 </style></head><body>
-<div id="hdr"><span class="tk">SPY US Equity</span><span class="lbl">Intraday Candle Chart</span></div>
+<div id="hdr"><span class="tk">SPY US Equity</span><span class="hint">拖曳平移（跨日無縫）｜ 滾輪/+- 縮放 ｜ ← → 切日期 ｜ 雙擊文字框編輯 ｜ 底部/右側邊緣拖曳可縮放軸</span><span id="cdlbadge" style="display:none"></span><span id="syncbadge" style="display:none"></span><span class="lbl">Intraday Candle Chart</span></div>
 <div id="tb">
-<button id="bp">&#8592; Prev</button>
-<input type="text" id="di" value="---" spellcheck="false">
-<button id="bn">Next &#8594;</button>
+<button id="bp" title="前一個交易日（← 鍵）">&#8592; Prev</button>
+<span id="dwrap" title="可直接輸入數字；↑↓ 切換前後交易日；點日曆圖示選日期"><span id="dbox"><input class="dseg" id="dY" maxlength="4" inputmode="numeric" autocomplete="off" spellcheck="false"><span class="dsep">-</span><input class="dseg" id="dM" maxlength="2" inputmode="numeric" autocomplete="off" spellcheck="false"><span class="dsep">-</span><input class="dseg" id="dD" maxlength="2" inputmode="numeric" autocomplete="off" spellcheck="false"></span><button id="dtog" title="開啟日曆">&#128197;</button></span>
+<button id="bn" title="後一個交易日（→ 鍵）">Next &#8594;</button>
 <button id="bt" title="跳到最新美股交易日">Today</button>
 <span class="pnl" id="dp">---</span><span class="tc" id="dtc"></span>
 <select id="cvsel" title="色版"></select>
@@ -811,8 +1019,8 @@ canvas{display:block;width:100%;height:100%}
 </div>
 <div id="cc"><canvas id="cv"></canvas><div id="nb"></div><div id="ld">載入中 ...</div></div>
 <div id="tb2"></div>
+<div id="dcal"></div>
 <div id="ned"><div class="pn"><h3 id="ned-title">市場概述</h3><textarea id="nt"></textarea><button id="ns">儲存</button></div></div>
-<div class="hint">拖曳平移（跨日無縫）｜ 滾輪/+- 縮放 ｜ ← → 切日期 ｜ 雙擊文字框編輯</div>
 <script>
 const cv=document.getElementById("cv"),ctx=cv.getContext("2d"),cc=document.getElementById("cc");
 
@@ -845,7 +1053,11 @@ function _saveNotesState(){
   }catch(e){}
 }
 let notesStateByDate=_loadNotesState()||{};
-let notesMini=!!notesStateByDate._mini;
+// Market wrap (市場概述) starts COLLAPSED on every load. The stored _mini flag is
+// still written by the toggle so it works within a session, but it is deliberately
+// NOT read here — otherwise an existing localStorage value of false would keep the
+// box expanded forever and the default would never apply.
+let notesMini=true;
 let nDrag=false,nOff={x:0,y:0};
 
 // Helper: get or create state for a given date
@@ -1030,30 +1242,53 @@ function t2iLocal(hm,candles){
 function autoY(){
   if(exportYOverride)return{pn:exportYOverride.pn,px:exportYOverride.px};
   let mn=1e9,mx=-1e9;
-  const focusDay=dayCache.get(dayList[focusIdx]);
-  if(focusDay&&focusDay.candles&&focusDay.candles.length){
-    focusDay.candles.forEach(c=>{mn=Math.min(mn,c.l);mx=Math.max(mx,c.h);});
-    (focusDay.trades||[]).forEach(t=>{
-      // Skip cross-day and hold trades — their prices may be far from today's range
+
+  // Y 範圍取自「畫面上實際看得到的 K 棒」，而不是焦點日。
+  //
+  // 原本是鎖定 dayList[focusIdx] 那一天的高低價當錨點。焦點日是離螢幕中心
+  // 最近的那天 —— 拖曳跨日時它會在某個瞬間切換，Y 錨點跟著整個跳掉，
+  // 畫面突然上下彈一下。焦點是離散的，所以跳動無法避免。
+  // 改成連續量（可見範圍）之後，平移時 Y 只會平滑跟隨，不會有跳點。
+  const gL=gi2x(M.l),gR=gi2x(W-M.r);
+  dayList.forEach((date,di)=>{
+    const d=dayCache.get(date);
+    if(!d||!d.candles||!d.candles.length)return;
+    const g0=gi(di,0);
+    const i0=Math.max(0,Math.floor(gL-g0)),i1=Math.min(d.candles.length-1,Math.ceil(gR-g0));
+    for(let i=i0;i<=i1;i++){
+      const c=d.candles[i];
+      if(c.l<mn)mn=c.l;
+      if(c.h>mx)mx=c.h;
+    }
+    // 進出場點也要在範圍內，否則交易線會被切掉；留倉/跨日單價格可能離今日很遠，排除
+    (d.trades||[]).forEach(t=>{
       if(t.isHold||t.crossDay)return;
-      if(t.entryPrice!=null){mn=Math.min(mn,t.entryPrice);mx=Math.max(mx,t.entryPrice);}
-      if(t.exitPrice!=null){mn=Math.min(mn,t.exitPrice);mx=Math.max(mx,t.exitPrice);}
+      const ei=t.entryTime?t2iLocal(t.entryTime,d.candles):-1;
+      if(ei>=i0&&ei<=i1&&t.entryPrice!=null){mn=Math.min(mn,t.entryPrice);mx=Math.max(mx,t.entryPrice);}
+      const xi=t.exitTime?t2iLocal(t.exitTime,d.candles):-1;
+      if(xi>=i0&&xi<=i1&&t.exitPrice!=null){mn=Math.min(mn,t.exitPrice);mx=Math.max(mx,t.exitPrice);}
     });
+  });
+
+  if(mn>mx){  // 畫面上沒有任何 K 棒（例如平移到空白區）→ 沿用上一次的範圍，不要亂跳
+    if(_lastY)return{pn:_lastY.pn+panY-_lastY.panY,px:_lastY.px+panY-_lastY.panY};
+    mn=650;mx=660;
   }
-  if(mn>mx){mn=650;mx=660;}
-  // Default: step=1 always (matches export). userYZoom > 1 widens the visible range,
-  // userYZoom < 1 narrows it. Step is chosen so step*7 covers the requested range.
+
   const baseRange=7; // default visible range = $7 (7 grids of $1)
   const targetRange=baseRange*userYZoom;
   const ladder=[0.1,0.2,0.5,1,2,5,10,20,50,100,200,500];
   let step=1;
   for(const s of ladder){if(s*7>=targetRange*1.0){step=s;break;}}
-  // Snap mid to half-step boundary so pn lands exactly on a line position
-  const rawMid=(mn+mx)/2;
-  const mid=Math.round(rawMid/step-0.5)*step+step/2;
+  // 中心不再吸附到半格邊界 —— 那個吸附本身就是量化跳動的來源。
+  // 格線仍然落在整數價位（draw() 用 Math.floor(pn/ps)*ps 起算），不受影響。
+  const mid=(mn+mx)/2;
   const half=step*3.5;
-  return{pn:mid-half+panY,px:mid+half+panY};
+  const r={pn:mid-half+panY,px:mid+half+panY};
+  _lastY={pn:r.pn,px:r.px,panY:panY};
+  return r;
 }
+let _lastY=null;
 
 function yOf(p,pn,px){return M.t+(1-(p-pn)/(px-pn))*cH;}
 function p2y(y,pn,px){return px-((y-M.t)/cH)*(px-pn);}
@@ -1077,7 +1312,7 @@ function updateFocus(){
 function updateToolbar(){
   const date=dayList[focusIdx]||"";
   const day=dayCache.get(date);
-  document.getElementById("di").value=date;
+  setDateBoxes(date);
   const pe=document.getElementById("dp"),dtc=document.getElementById("dtc");
   if(!day||day.noTrading){pe.textContent="非交易日";pe.className="pnl";pe.style.color="#8B8F98";dtc.textContent="";}
   else if(!day.trades||!day.trades.length){pe.textContent="無當日交易記錄";pe.className="pnl";pe.style.color="#8B8F98";dtc.textContent="";}
@@ -1105,12 +1340,18 @@ function updateToolbar(){
 // ── Hit test trades (across all visible days) ──
 function hitTest(mx,my,pn,px){
   for(let di=0;di<dayList.length;di++){
-    const day=dayCache.get(dayList[di]);if(!day||!day.trades)continue;
+    const day=dayCache.get(dayList[di]);if(!day||!day.trades||!day.candles||!day.candles.length)continue;
     for(let ti=0;ti<day.trades.length;ti++){
       const t=day.trades[ti];
-      const ei=t2iLocal(t.entryTime,day.candles),xi=t2iLocal(t.exitTime,day.candles);
+      if(t.entryTime==null||t.entryPrice==null)continue;
+      // 留倉 (isHold) rows carry exitTime/exitPrice = null — t2iLocal would throw on
+      // null.split(), which killed the whole mousemove handler (crosshair + hover dead
+      // on every day holding a position). Collapse them to a point at the entry.
+      const ei=t2iLocal(t.entryTime,day.candles);
+      const xi=t.exitTime!=null?t2iLocal(t.exitTime,day.candles):ei;
+      const exitP=t.exitPrice!=null?t.exitPrice:t.entryPrice;
       const x1=xOfGi(gi(di,ei)),y1=yOf(t.entryPrice,pn,px);
-      const x2=xOfGi(gi(di,xi)),y2=yOf(t.exitPrice,pn,px);
+      const x2=xOfGi(gi(di,xi)),y2=yOf(exitP,pn,px);
       const dx=x2-x1,dy=y2-y1,l2=dx*dx+dy*dy;let d2;
       if(l2===0)d2=Math.hypot(mx-x1,my-y1);
       else{const tt=Math.max(0,Math.min(1,((mx-x1)*dx+(my-y1)*dy)/l2));d2=Math.hypot(mx-(x1+tt*dx),my-(y1+tt*dy));}
@@ -2229,7 +2470,7 @@ async function loadTradingDay(startDate,direction){
       continue; // cached but non-trading, skip
     }
     try{
-      const res=await fetch(`/api/data?date=${ds}`);const data=await res.json();
+      const res=await fetch(`/api/data?date=${ds}`,{cache:"no-store"});const data=await res.json();
       dayCache.set(ds,{candles:data.candles||[],trades:data.trades||[],notes:data.notes||"",noTrading:!!data.noTrading});
       if(data.candles&&data.candles.length)return ds; // found trading day
     }catch(e){dayCache.set(ds,{candles:[],trades:[],notes:"",noTrading:true});}
@@ -2237,28 +2478,50 @@ async function loadTradingDay(startDate,direction){
   return null; // no trading day found within 7 days
 }
 
+// Shift the whole virtual timeline by dpx pixels.
+// Prepending a day renumbers every global index by +(BPD+GAP), so panX must be
+// pulled back by one day-width to keep the picture still. CRITICAL: an in-flight
+// canvas drag recomputes panX from its own anchor every mousemove
+// (panX = cDP.x + dx), which would silently DISCARD that compensation and
+// teleport the view a full day — which then re-triggers the edge check and
+// cascades into skipping many days per drag (root cause of the 跨日跳多天 bug).
+// So the drag anchor has to move with the world.
+function shiftWorldX(dpx){
+  panX+=dpx;
+  cDP.x+=dpx;   // keep an in-flight cDrag anchored to the shifted world
+}
+
 async function checkEdges(){
   if(loading||!dayList.length)return;
-  const leftG=gi2x(M.l),rightG=gi2x(W-M.r);
-  const firstDayStart=gi(0,0);
-  const lastDayEnd=gi(dayList.length-1,BPD-1);
-  // Near left edge → load previous trading day
-  if(leftG<firstDayStart+60){
-    loading=true;
-    const found=await loadTradingDay(dayList[0],-1);
-    if(found){
-      dayList.unshift(found);focusIdx++;
-      panX-=(BPD+GAP)*ppb();
+  loading=true;
+  try{
+    // One call may need several days when zoomed far out (ZMIN shows ~4 days).
+    // Each prepend raises leftG by exactly (BPD+GAP) and each append raises
+    // lastDayEnd by the same, so the loop is guaranteed to converge; the cap is
+    // only a backstop against a pathological viewport.
+    for(let n=0;n<6;n++){
+      let didLoad=false;
+      // Near left edge → load previous trading day
+      if(gi2x(M.l)<gi(0,0)+60){
+        const found=await loadTradingDay(dayList[0],-1);
+        if(found){
+          dayList.unshift(found);focusIdx++;
+          // ppb() read AFTER the await, so a zoom change mid-fetch can't skew it
+          shiftWorldX(-(BPD+GAP)*ppb());
+          didLoad=true;
+        }
+      }
+      // Near right edge → load next trading day
+      if(gi2x(W-M.r)>gi(dayList.length-1,BPD-1)-60){
+        const found=await loadTradingDay(dayList[dayList.length-1],1);
+        if(found){dayList.push(found);didLoad=true;}
+      }
+      if(!didLoad)break;
     }
-    loading=false;draw();
+  } finally {
+    loading=false;
   }
-  // Near right edge → load next trading day
-  if(rightG>lastDayEnd-60){
-    loading=true;
-    const found=await loadTradingDay(dayList[dayList.length-1],1);
-    if(found){dayList.push(found);}
-    loading=false;draw();
-  }
+  draw();
 }
 
 // ═══════════════════════════════════════════════════
@@ -2430,6 +2693,13 @@ document.addEventListener("mousemove",e=>{
     mouse=null;draw();checkEdges();updateFocus();return;
   }
   const r=cv.getBoundingClientRect();mouse={x:e.clientX-r.left,y:e.clientY-r.top};
+  // Axis strips are drag-to-zoom targets but looked identical to the chart body.
+  // Mirror the cursor mousedown would set, so the affordance is visible on hover.
+  if(mouse.x>=0&&mouse.x<=W&&mouse.y>=0&&mouse.y<=H){
+    if(mouse.y>=H-M.b&&mouse.x>M.l&&mouse.x<W-M.r)cv.style.cursor="ew-resize";
+    else if(mouse.x>=W-M.r&&mouse.y>M.t&&mouse.y<H-M.b)cv.style.cursor="ns-resize";
+    else cv.style.cursor="crosshair";
+  }
   const{pn,px}=autoY();
   const ht=hitTest(mouse.x,mouse.y,pn,px);
   if(JSON.stringify(ht)!==JSON.stringify(hovHit)){
@@ -2521,10 +2791,16 @@ async function isFirstTradingDayOfWeek(ds){
   return true;
 }
 
+let _exporting=false; // re-entrancy guard: a 2nd run would save the ALREADY-exported
+                      // state as "saved", permanently corrupting the view on restore
 async function exportPNG(){
+  if(_exporting)return;
   const day=dayCache.get(dayList[focusIdx]);
   if(!day||!day.candles||!day.candles.length){alert("無 K 線資料無法輸出");return;}
   const date=dayList[focusIdx];
+  _exporting=true;
+  const _beBtn=document.getElementById("be"),_ldEl=document.getElementById("ld");
+  _beBtn.disabled=true;_ldEl.textContent="輸出中 ...";_ldEl.style.display="block";
 
   // Compute full day price range (including trade prices)
   let mn=1e9,mx=-1e9;
@@ -2567,6 +2843,10 @@ async function exportPNG(){
   const savedCvW=cv.width,savedCvH=cv.height,savedStyleW=cv.style.width,savedStyleH=cv.style.height;
   const savedM={...M};
 
+  // Everything below mutates global view state (dayList, M, canvas size, export
+  // flags). Wrapped in try/finally so a throw mid-render can't strand the app in
+  // export mode — that state is unrecoverable without a page reload.
+  try{
   dayList=exportDayList;
   focusIdx=0;
 
@@ -2724,18 +3004,22 @@ async function exportPNG(){
     }
   }
 
-  // Restore resize function
-  resizeFreeze=false;
+  } finally {
+    // Restore resize function
+    resizeFreeze=false;
 
-  // Restore canvas state
-  cv.width=savedCvW;cv.height=savedCvH;
-  cv.style.width=savedStyleW;cv.style.height=savedStyleH;
-  M=savedM;
+    // Restore canvas state
+    cv.width=savedCvW;cv.height=savedCvH;
+    cv.style.width=savedStyleW;cv.style.height=savedStyleH;
+    M=savedM;
 
-  // Restore export flags & view state
-  exportMode=false;exportLightMode=false;exportDualAxis=false;exportYAxisLeft=false;exportYOverride=null;notesAnchorPrice=null;notesPageIdx=null;currentExportPageIdx=null;exportPageTops=null;exportPrevClose=null;exportLabelCache=null;
-  dayList=savedDayList;focusIdx=savedFocusIdx;zoom=savedZoom;panX=savedPanX;panY=savedPanY;userYZoom=savedUserYZoom;
-  draw();
+    // Restore export flags & view state
+    exportMode=false;exportLightMode=false;exportDualAxis=false;exportYAxisLeft=false;exportYOverride=null;notesAnchorPrice=null;notesPageIdx=null;currentExportPageIdx=null;exportPageTops=null;exportPrevClose=null;exportLabelCache=null;
+    dayList=savedDayList;focusIdx=savedFocusIdx;zoom=savedZoom;panX=savedPanX;panY=savedPanY;userYZoom=savedUserYZoom;
+    _exporting=false;
+    _beBtn.disabled=false;_ldEl.style.display="none";_ldEl.textContent="載入中 ...";
+    draw();
+  }
 }
 document.getElementById("be").addEventListener("click",exportPNG);
 
@@ -2744,7 +3028,7 @@ document.getElementById("be").addEventListener("click",exportPNG);
 // ═══════════════════════════════════════════════════
 async function loadDay(ds){
   if(dayCache.has(ds))return;
-  const res=await fetch(`/api/data?date=${ds}`);const data=await res.json();
+  const res=await fetch(`/api/data?date=${ds}`,{cache:"no-store"});const data=await res.json();
   dayCache.set(ds,{candles:data.candles||[],trades:data.trades||[],notes:data.notes||"",noTrading:!!data.noTrading});
 }
 
@@ -2764,9 +3048,16 @@ async function jumpTo(ds){
     await loadDay(ds);
     const day=dayCache.get(ds);
     if(!day||!day.candles||!day.candles.length){
+      const asked=ds;
       const found=await loadTradingDay(ds,-1);
-      if(found){ds=found;}
-      else{document.getElementById("ld").style.display="none";return;}
+      if(found){
+        ds=found;
+        // 不要靜默改跳。使用者明確輸入/點選了某一天，卻看到別天的圖，
+        // 沒有提示的話只會以為是自己看錯或程式壞了。
+        if(typeof showToast==="function")showToast(`${asked} 無 K 線資料，已改顯示 ${found}`);
+      }
+      else{document.getElementById("ld").style.display="none";
+        if(typeof showToast==="function")showToast(`${asked} 無 K 線資料`);return;}
     }
     // Reset and load neighbors first
     dayList=[ds];focusIdx=0;
@@ -2850,10 +3141,129 @@ function updateLegend(){
 
 async function init(){
   await loadColors();
-  const res=await fetch("/api/dates");const dates=await res.json();
+  const res=await fetch("/api/dates",{cache:"no-store"});const dj=await res.json();
+  const dates=dj.dates||[];
+  allDates=dates;                              // 日曆用來判斷哪些日子可點
+  allDateSet=new Set(dates);
+  noCandleDates=new Set(dj.no_candles||[]);    // 有交易但沒有 K 線，日曆上標成褐色
   if(dates.length){await jumpTo(dates[0]);}
   else{const today=getLatestUSTradeDate();await jumpTo(today);}
+  seedDataVersion();
 }
+
+// ── Auto-reload when trades_all.xlsx is edited externally (no app restart needed) ──
+function showToast(msg){
+  let t=document.getElementById("_toast");
+  if(!t){t=document.createElement("div");t.id="_toast";
+    t.style.cssText="position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:rgba(20,20,20,.88);color:#fff;padding:8px 16px;border-radius:6px;font-size:14px;z-index:99999;transition:opacity .3s;pointer-events:none";
+    document.body.appendChild(t);}
+  t.textContent=msg;t.style.opacity="1";
+  clearTimeout(t._h);t._h=setTimeout(()=>{t.style.opacity="0";},1700);
+}
+// Re-fetch the currently loaded days without resetting pan/zoom/focus.
+// Fetch into a staging map FIRST, then swap in one synchronous step: the old code
+// cleared dayCache up front, so every draw() during the refetch window (drag, edge
+// load, the 4s poll itself) rendered an empty chart.
+async function refreshData(){
+  const dates=[...dayList];if(!dates.length)return;
+  const fresh=new Map();
+  for(const ds of dates){
+    try{
+      const res=await fetch(`/api/data?date=${ds}`,{cache:"no-store"});const d=await res.json();
+      fresh.set(ds,{candles:d.candles||[],trades:d.trades||[],notes:d.notes||"",noTrading:!!d.noTrading});
+    }catch(e){const old=dayCache.get(ds);if(old)fresh.set(ds,old);}
+  }
+  dayCache.clear();                       // drop stale off-screen days too
+  for(const[k,v]of fresh)dayCache.set(k,v); // ...but never leave dayList uncached
+  if(typeof updateToolbar==="function")updateToolbar();
+  draw();
+  if(typeof updateLegend==="function")updateLegend();
+}
+let _dataVer=null,_verBusy=false;
+async function seedDataVersion(){
+  try{const r=await fetch("/api/version",{cache:"no-store"});const j=await r.json();
+    _dataVer=j.trades;renderSyncBadge(j.sync,j.candles);}catch(e){}
+}
+async function checkDataVersion(){
+  if(_verBusy||_exporting||exportMode)return;  // never yank data out from under an export
+  _verBusy=true;
+  try{
+    const r=await fetch("/api/version",{cache:"no-store"});const j=await r.json();const v=j.trades;
+    renderSyncBadge(j.sync,j.candles);
+    if(_dataVer===null){_dataVer=v;}
+    else if(v!==_dataVer){_dataVer=v;await refreshData();showToast("資料已更新");}
+  }catch(e){}finally{_verBusy=false;}
+}
+
+// 同步新鮮度：Boss PC 每次跑完寫 sync_state.json，隨 git 一起同步過來。
+// 少了這個，push 失敗與「今天還沒開盤」在畫面上長得一模一樣。
+// 落後幾個「美股交易日」——刻意不用「距上次更新幾小時」。
+// Boss PC 週末關機，週五的帳要等週一較晚開機才補；用時數判斷的話
+// 每個週末都會固定跨過 30 小時而變紅。每週都在誤報的告警等於沒有告警。
+function tradingDaysBehind(lastDate){
+  if(!lastDate)return 99;
+  const latest=getLatestUSTradeDate();          // 已含週末回溯
+  if(lastDate>=latest)return 0;
+  let n=0,d=new Date(latest+"T12:00:00");
+  const stop=new Date(lastDate+"T12:00:00");
+  while(d>stop&&n<99){
+    d.setDate(d.getDate()-1);
+    if(d.getDay()!==0&&d.getDay()!==6)n++;      // 只數平日
+  }
+  return n;
+}
+
+// K 線新鮮度徽章：交易帳與股價線是兩條獨立的鏈。2026-09-07 勞動節休市那次，
+// 使用者只看到「最新停在 9/4」，無從分辨是正確還是壞掉 —— 所以這裡一律講清楚
+// 「應該要有的最新交易日」是哪天、有沒有到手、今天為什麼沒有盤。
+function renderCandleBadge(c){
+  const el=document.getElementById("cdlbadge");
+  if(!el)return;
+  if(!c||c.error){el.style.display="none";return;}
+  el.style.display="";
+  if(c.up_to_date){
+    el.style.color="#6B7280";
+    el.textContent=`K線最新 ${c.expected}`;
+    el.title=`股價線已是最新：最近一個已收盤的美股交易日是 ${c.expected}，資料已在檔。
+`
+            +(c.today_closed_reason?`美東今日 ${c.today_et} ${c.today_closed_reason}休市，本來就沒有新資料。
+`:"")
+            +(c.checked_at?`上次檢查 ${c.checked_at}（每 60 分自動檢查）`:"");
+  }else{
+    el.style.color="#FF4444";
+    el.textContent=`✕K線缺 ${c.expected}`;
+    el.title=`股價線沒跟上：應該要有 ${c.expected} 的 K 線但檔案裡沒有。
+`
+            +(c.missing&&c.missing.length?`已重試仍缺：${c.missing.join(", ")}
+`:"")
+            +(c.checked_at?`上次檢查 ${c.checked_at}`:"尚未檢查過");
+  }
+}
+
+function renderSyncBadge(s,c){
+  renderCandleBadge(c);
+  const el=document.getElementById("syncbadge");
+  if(!el)return;
+  if(!s||!s.updated_utc){el.style.display="none";return;}
+  el.style.display="";
+  const behind=tradingDaysBehind(s.last_trade_date);
+  let color="#6B7280",txt=`資料截至 ${s.last_trade_date||"?"}`;
+  if(s.status==="blocked"){color="#E0A800";txt+=" ⚠需人工確認";}
+  else if(s.status==="failed"){color="#FF4444";txt+=" ✕採集失敗";}
+  // 落後 1 個交易日是正常待處理（例：週一早上，週五的帳還沒補）
+  else if(behind>=2){color="#FF4444";txt+=` ✕落後 ${behind} 個交易日`;}
+  else if(behind===1){color="#E0A800";txt+=" ⚠待補前一交易日";}
+  el.style.color=color;
+  el.textContent=txt;
+  const ageH=Math.floor((Date.now()-Date.parse(s.updated_utc))/3600000);
+  el.title=`status=${s.status||"?"}  host=${s.host||"?"}\n`
+           +`最新美股交易日=${getLatestUSTradeDate()}  落後=${behind}\n`
+           +`updated=${s.updated_utc}（${ageH}h 前）`
+           +(s.note?`\n${s.note}`:"");
+}
+setInterval(checkDataVersion,4000);                 // poll every 4s
+window.addEventListener("focus",checkDataVersion);  // and instantly when returning to the tab
+document.addEventListener("visibilitychange",()=>{if(!document.hidden)checkDataVersion();});
 
 document.getElementById("bp").addEventListener("click",async()=>{
   const cur=dayList[focusIdx]||dayList[0];
@@ -2867,10 +3277,125 @@ document.getElementById("bn").addEventListener("click",async()=>{
 });
 document.getElementById("bt").addEventListener("click",()=>jumpTo(getLatestUSTradeDate()));
 
-const di=document.getElementById("di");
-di.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();di.blur();
-const v=di.value.trim();if(/^\d{4}-\d{2}-\d{2}$/.test(v))jumpTo(v);}});
-di.addEventListener("focus",()=>di.select());
+// ── 日期選擇器：年月日三格 + 迷你日曆 ────────────────────────────────
+const dY=document.getElementById("dY"),dM=document.getElementById("dM"),dD=document.getElementById("dD"),
+      dbox=document.getElementById("dbox"),dtog=document.getElementById("dtog"),dcal=document.getElementById("dcal");
+const dsegs=[dY,dM,dD];
+let allDates=[],allDateSet=new Set(),noCandleDates=new Set();
+let calY=null,calM=null;   // 日曆目前顯示的年/月（1-12）
+
+const pad=(n,w)=>String(n).padStart(w,"0");
+function dateBoxFocused(){return dsegs.indexOf(document.activeElement)>=0;}
+function setDateBoxes(ds){
+  if(!ds||!/^\d{4}-\d{2}-\d{2}$/.test(ds)){dY.value="";dM.value="";dD.value="";return;}
+  dY.value=ds.slice(0,4);dM.value=ds.slice(5,7);dD.value=ds.slice(8,10);
+}
+function readDateBoxes(){
+  const y=dY.value.trim(),m=dM.value.trim(),d=dD.value.trim();
+  if(!/^\d{4}$/.test(y)||!/^\d{1,2}$/.test(m)||!/^\d{1,2}$/.test(d))return null;
+  const mm=+m,dd=+d;
+  if(mm<1||mm>12||dd<1||dd>31)return null;
+  return `${y}-${pad(mm,2)}-${pad(dd,2)}`;
+}
+
+// ── 迷你日曆 ──
+function calRender(){
+  const cur=dayList[focusIdx]||"";
+  if(calY===null){const b=(cur||getLatestUSTradeDate());calY=+b.slice(0,4);calM=+b.slice(5,7);}
+  const first=new Date(calY,calM-1,1), lead=first.getDay(),
+        ndays=new Date(calY,calM,0).getDate(),
+        todayStr=getLatestUSTradeDate();
+  let cells="",dayN=1;
+  for(let r=0;r<6;r++){
+    let row="";
+    for(let c=0;c<7;c++){
+      if((r===0&&c<lead)||dayN>ndays){row+="<td></td>";continue;}
+      const ds=`${calY}-${pad(calM,2)}-${pad(dayN,2)}`;
+      const cls=[];
+      if(noCandleDates.has(ds))cls.push("nok");
+      else if(allDateSet.has(ds))cls.push("has");
+      if(ds===cur)cls.push("cur");
+      if(ds===todayStr)cls.push("today");
+      row+=`<td class="${cls.join(" ")}" data-d="${ds}">${dayN}</td>`;
+      dayN++;
+    }
+    cells+=`<tr>${row}</tr>`;
+    if(dayN>ndays)break;
+  }
+  dcal.innerHTML=
+    `<div class="cal-hd"><button class="cal-nav" data-mv="-1">&#8249;</button>`
+   +`<span class="ttl">${calY} 年 ${calM} 月</span>`
+   +`<button class="cal-nav" data-mv="1">&#8250;</button></div>`
+   +`<table><tr><th class="we">日</th><th>一</th><th>二</th><th>三</th><th>四</th><th>五</th><th class="we">六</th></tr>`
+   +cells+`</table>`
+   +`<div class="cal-ft"><b>亮＝可檢視</b>　<span style="color:#FF8C00">橘底＝目前</span>`
+   +`　<span style="color:#C08A3E">褐＝有交易無 K 線</span>　暗＝休市</div>`;
+}
+function calOpen(){
+  const cur=dayList[focusIdx]||"";
+  if(cur){calY=+cur.slice(0,4);calM=+cur.slice(5,7);}
+  calRender();
+  dcal.classList.add("show");
+  calPosition();
+}
+// #dcal 是 position:fixed 掛在 body（見 CSS 的說明），所以要自己算位置：
+// 對齊日期輸入框左緣、貼在它下方；靠近視窗邊界時往內收，避免被切掉。
+function calPosition(){
+  const b=dbox.getBoundingClientRect(),r=dcal.getBoundingClientRect();
+  let left=b.left, top=b.bottom+4;
+  if(left+r.width>innerWidth-8)left=Math.max(8,innerWidth-r.width-8);
+  if(top+r.height>innerHeight-8)top=Math.max(8,b.top-r.height-4);   // 下方放不下就翻到上方
+  dcal.style.left=left+"px";
+  dcal.style.top=top+"px";
+}
+window.addEventListener("resize",()=>{if(dcal.classList.contains("show"))calPosition();});
+function calClose(){dcal.classList.remove("show");}
+
+dtog.addEventListener("click",e=>{e.stopPropagation();
+  if(dcal.classList.contains("show"))calClose();else calOpen();});
+dcal.addEventListener("mousedown",e=>{     // mousedown 早於 blur，才點得到
+  const nav=e.target.closest(".cal-nav");
+  if(nav){e.preventDefault();calM+= +nav.dataset.mv;
+    if(calM<1){calM=12;calY--;}else if(calM>12){calM=1;calY++;}
+    calRender();return;}
+  const td=e.target.closest("td[data-d]");
+  if(!td||(!td.classList.contains("has")&&!td.classList.contains("nok")))return;  // 非交易日不可點
+  e.preventDefault();calClose();jumpTo(td.dataset.d);
+});
+document.addEventListener("click",e=>{if(!e.target.closest("#dwrap"))calClose();});
+
+// ── 三格輸入 ──
+dsegs.forEach((el,idx)=>{
+  el.addEventListener("focus",()=>{el.select();dbox.classList.add("focus");});
+  el.addEventListener("blur",()=>setTimeout(()=>{if(!dateBoxFocused())dbox.classList.remove("focus");},0));
+  el.addEventListener("input",()=>{
+    el.value=el.value.replace(/\D/g,"");
+    // 填滿就自動跳下一格，這是分段日期輸入的基本手感
+    if(el.value.length>=el.maxLength&&idx<2)dsegs[idx+1].focus();
+  });
+  el.addEventListener("keydown",e=>{
+    // ↑↓：前後交易日（跟 ←/→ 按鈕同語意，會自動跳過休市日）
+    if(e.key==="ArrowUp"||e.key==="ArrowDown"){
+      e.preventDefault();
+      const cur=dayList[focusIdx]||dayList[0];
+      if(!cur)return;
+      loadTradingDay(cur,e.key==="ArrowUp"?1:-1).then(d=>{if(d)jumpTo(d);});
+      return;
+    }
+    if(e.key==="Enter"){
+      e.preventDefault();
+      const v=readDateBoxes();
+      if(v){calClose();el.blur();jumpTo(v);}
+      else{showToast("日期格式不完整");setDateBoxes(dayList[focusIdx]||"");}
+      return;
+    }
+    if(e.key==="Escape"){calClose();setDateBoxes(dayList[focusIdx]||"");el.blur();return;}
+    // 左右鍵在格子邊界時換格
+    if(e.key==="ArrowLeft"&&idx>0&&el.selectionStart===0){e.preventDefault();dsegs[idx-1].focus();}
+    if(e.key==="ArrowRight"&&idx<2&&el.selectionStart===el.value.length){e.preventDefault();dsegs[idx+1].focus();}
+    if(e.key==="Backspace"&&idx>0&&!el.value){e.preventDefault();dsegs[idx-1].focus();}
+  });
+});
 
 document.getElementById("ns").addEventListener("click",()=>{
   const day=dayCache.get(dayList[focusIdx]);if(day)day.notes=document.getElementById("nt").value;
@@ -2879,7 +3404,7 @@ document.getElementById("ns").addEventListener("click",()=>{
 });
 document.getElementById("ned").addEventListener("click",e=>{if(e.target===document.getElementById("ned"))document.getElementById("ned").classList.remove("show");});
 
-document.addEventListener("keydown",e=>{if(document.getElementById("ned").classList.contains("show")||document.activeElement===di)return;
+document.addEventListener("keydown",e=>{if(document.getElementById("ned").classList.contains("show")||dateBoxFocused())return;
 if(e.key==="ArrowLeft")document.getElementById("bp").click();
 if(e.key==="ArrowRight")document.getElementById("bn").click();
 if(e.key==="+"||e.key==="=")doZoom(ZS);if(e.key==="-")doZoom(-ZS);});
@@ -2895,20 +3420,196 @@ initIndButtons();
 init().then(gotoDateFromHash);
 </script></body></html>"""
 
+# ── 主動補 K 線（背景執行緒，2026-08-19）────────────────────────────────
+# 為什麼需要：_append_to_history 只由 fetch_intraday 呼叫，而 fetch_intraday 只在
+# /api/data（使用者點開某天）時才跑。沒有交易的日子不在 trades_all 裡，也還不在
+# history 裡，所以根本不會出現在 /api/dates 清單上 → 點不到 → 永遠不會被補。
+# 死鎖的結果就是「沒交易的日子看不到股價線」。先主動補進 history，那天就會自己
+# 出現在清單上。
+#
+# 刻意放在 app 內部而不是另寫排程腳本：history_minute.xlsx 也被本 app 回寫，
+# 兩個 process 同時重寫這個 4.4MB 活頁簿正是 2026-08-10 把它寫成截斷 zip 的成因。
+# 同一個 process 內走既有的 _file_lock + _atomic_to_excel，沒有跨程序競態。
+REFRESH_LOOKBACK_DAYS = 7        # 往回掃幾個日曆日
+REFRESH_INTERVAL_SEC  = 3600     # 每小時檢查一次
+REFRESH_MAX_ATTEMPTS  = 3        # 同一天連續抓空幾次就放棄（假日不必每小時重試）
+_refresh_attempts = {}
+
+# 美股行事曆（us_market_calendar.py）。抽成獨立模組是為了能單獨驗證 ——
+# 已用 history_minute.xlsx 裡 339 個真實交易日反向檢驗過：休市判定 0 誤判。
+try:
+    from us_market_calendar import (market_closed_reason as _closed_reason,
+                                    latest_completed_session as _latest_session)
+except Exception as _e:
+    print(f"  ⚠ 美股行事曆載入失敗，退回「只排除週末」：{type(_e).__name__}: {_e}")
+    def _closed_reason(d):
+        return "週末" if d.weekday() >= 5 else None
+    def _latest_session(now_et, close_hour=16, close_min=5):
+        d = now_et.date()
+        if now_et < dt.datetime.combine(d, dt.time(close_hour, close_min)):
+            d -= dt.timedelta(days=1)
+        while d.weekday() >= 5:
+            d -= dt.timedelta(days=1)
+        return d
+
+def _et_now():
+    """美東現在時間（naive）。判斷「某天收盤了沒」只需要美東當地時間。"""
+    try:
+        from zoneinfo import ZoneInfo
+        return dt.datetime.now(ZoneInfo("America/New_York")).replace(tzinfo=None)
+    except Exception:
+        # 沒有 tz 資料庫時退回 UTC-4（夏令）。只用於收盤判斷，1 小時誤差無妨。
+        return dt.datetime.utcnow() - dt.timedelta(hours=4)
+
+def _settled_sessions(lookback_days=REFRESH_LOOKBACK_DAYS):
+    """回傳「已經收盤」的美股交易日（新到舊）。
+
+    兩道排除：
+    1. 非交易日（週末＋全天休市，見 us_market_calendar）。2026-09-07 勞動節就是
+       這類 —— 原本只排除週末，於是每小時去問 yfinance、抓空、靜默重試三次後放棄，
+       使用者只看得到「最新停在 9/4」卻無從分辨是休市還是壞掉。
+    2. 還沒收盤的當天：盤中抓只會拿到半天 bar，而 _append_to_history 見日期已存在
+       就不再更新 —— 那筆殘缺資料會被永久凍結。所以一律等 16:05 ET 之後才收。
+    """
+    now = _et_now()
+    out = []
+    for i in range(lookback_days):
+        d = (now - dt.timedelta(days=i)).date()
+        if _closed_reason(d):            # 週末或休市，本來就沒有盤
+            continue
+        if now < dt.datetime.combine(d, dt.time(16, 5)):
+            continue                     # 當天還沒收盤（或還在盤中）
+        out.append(d.strftime("%Y-%m-%d"))
+    return out
+
+def _rlog(msg):
+    """補 K 線的運維日誌。務必 flush：pythonw 下 stdout 是檔案，預設區塊緩衝
+    會讓這些訊息卡在記憶體裡好幾個小時 —— 正好在你要查問題的時候看不到。"""
+    try:
+        print(msg, flush=True)
+    except Exception:
+        pass
+
+# 最近一次補 K 線的結果，供 /api/version 回報，讓前端能明確說出「資料是最新的」
+_refresh_status = {"checked_at": None, "expected": None, "have_expected": None,
+                   "added": [], "missing": [], "closed_today": None}
+
+def candle_currency():
+    """回答「K 線資料到底是不是最新的」—— 這是本次改動的重點。
+
+    原本使用者只看得到「最新停在 9/4」，無從分辨那是正確（9/7 勞動節休市）
+    還是壞掉（沒補進來）。有了行事曆，就能給出確定的答案而不是沉默。
+    """
+    now = _et_now()
+    expected = _latest_session(now).strftime("%Y-%m-%d")   # 應該要有的最新交易日
+    try:
+        hist = _load_history_by_date()
+        latest = max(hist.keys()) if hist else None
+        ok = expected in hist and bool(hist[expected])
+    except Exception:
+        latest, ok = None, False
+    today_reason = _closed_reason(now.date())
+    return {"expected": expected, "latest": latest, "up_to_date": ok,
+            "today_et": now.strftime("%Y-%m-%d"),
+            "today_closed_reason": today_reason,
+            "checked_at": _refresh_status.get("checked_at"),
+            "missing": _refresh_status.get("missing") or []}
+
+def _refresh_recent_candles():
+    """把最近幾個已收盤交易日補進 history_minute.xlsx。回傳實際補進的日期。"""
+    added, missing = [], []
+    sessions = _settled_sessions()
+    for ds in sessions:
+        try:
+            hist = _load_history_by_date()
+            if ds in hist and hist[ds]:
+                continue                 # 已經有了
+            if _refresh_attempts.get(ds, 0) >= REFRESH_MAX_ATTEMPTS:
+                missing.append(ds)       # 試過仍拿不到 —— 這才是真的異常
+                continue
+            # 清掉負快取：常駐 app 下，一次網路抖動就會讓這天在本 process 內
+            # 永遠不再重試。每輪重新給它機會，靠 attempts 上限收斂。
+            _negative_cache.discard(ds)
+            _cache.pop(f"{TICKER}|{ds}", None)
+            bars = fetch_intraday(TICKER, ds)
+            if bars:
+                added.append(f"{ds}({len(bars)}根)")
+                _refresh_attempts.pop(ds, None)
+            else:
+                n = _refresh_attempts.get(ds, 0) + 1
+                _refresh_attempts[ds] = n
+                _rlog(f"[refresh] {ds} 抓不到資料（第 {n}/{REFRESH_MAX_ATTEMPTS} 次）"
+                      f"—— 該日並非休市日，請留意")
+                if n >= REFRESH_MAX_ATTEMPTS:
+                    missing.append(ds)
+        except Exception as e:
+            _refresh_attempts[ds] = _refresh_attempts.get(ds, 0) + 1
+            _rlog(f"[refresh] {ds} 失敗：{type(e).__name__}: {e}")
+    # 每輪都留下紀錄：安靜要能被證明是「正確的安靜」，不是「沒在跑」
+    cur = candle_currency()
+    _refresh_status.update({"checked_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
+                            "expected": cur["expected"], "have_expected": cur["up_to_date"],
+                            "added": added, "missing": missing,
+                            "closed_today": cur["today_closed_reason"]})
+    if added:
+        _rlog(f"[refresh] {dt.datetime.now():%m-%d %H:%M} 已補 K 線：{', '.join(added)}")
+    else:
+        why = f"；美東今日 {cur['today_et']} {cur['today_closed_reason']}休市"               if cur["today_closed_reason"] else ""
+        _rlog(f"[refresh] {dt.datetime.now():%m-%d %H:%M} 無需補件"
+              f"（最新已收盤交易日 {cur['expected']} 已在檔){why}"
+              + (f"；仍缺 {', '.join(missing)}" if missing else ""))
+    return added
+
+def _refresh_loop():
+    time.sleep(20)                       # 讓 Flask 先起來，不跟啟動搶 I/O
+    while True:
+        try:
+            _refresh_recent_candles()
+        except Exception as e:
+            _rlog(f"[refresh] 迴圈例外（略過本輪）：{type(e).__name__}: {e}")
+        time.sleep(REFRESH_INTERVAL_SEC)
+
+
 if __name__=="__main__":
     print(f"\n  Trade Review Web App v3\n  Root:    {ROOT_FOLDER}\n  Trades:  {TRADES_FILE}\n  History: {HISTORY_FILE}\n  Notes:   {NOTES_FOLDER}\n  http://localhost:{PORT}\n")
     if not os.path.exists(ROOT_FOLDER):os.makedirs(ROOT_FOLDER,exist_ok=True)
     if not os.path.exists(NOTES_FOLDER):os.makedirs(NOTES_FOLDER,exist_ok=True)
-    # Pre-load history file so first API request is fast
+    # 以下兩段只是「暖身快取」，讓第一個請求快一點。它們絕不能擋住伺服器啟動：
+    # 這個 app 的核心價值是「隨時打得開、看得到過往所有 K 線」，而 K 線來自
+    # history_minute.xlsx，跟帳本完全無關。就算 trades_all 壞掉、還沒寫入當日
+    # 交易、或分析邏輯出例外，圖表都還是該看得到。
+    # （pythonw 沒有主控台，這裡若拋例外只會靜默不啟動 —— 最難察覺的失敗。）
     if os.path.exists(HISTORY_FILE):
         print("  Loading history file (may take a moment for large files)...")
-        hist = _load_history_by_date()
-        print(f"  [OK] {len(hist)} trading days ready")
-    # Pre-run trade analysis
+        try:
+            hist = _load_history_by_date()
+            print(f"  [OK] {len(hist)} trading days ready")
+        except Exception as e:
+            print(f"  ⚠ history 預載失敗（不影響啟動，改為每次請求時再讀）：{type(e).__name__}: {e}")
     print("  Analysing trades...")
-    _analyse_all_trades()
-    print("  [OK] Trade analysis complete")
+    try:
+        _analyse_all_trades()
+        print("  [OK] Trade analysis complete")
+    except Exception as e:
+        print(f"  ⚠ 交易分析預載失敗（不影響啟動，K 線仍可正常瀏覽）：{type(e).__name__}: {e}")
     if not os.path.exists(TRADES_FILE):
         print(f"  ⚠ {TRADES_FILE} not found. Create it with columns:")
         print(f"     Date | Exec Time(EDT) | Symbol | Price | Type | 損益(AI辨識) | Shares")
-    app.run(host="0.0.0.0",port=PORT,debug=False)
+    # 主動補 K 線：daemon 執行緒，絕不擋啟動、也絕不擋關閉。
+    # 失敗只寫 log，圖表照樣看得到既有資料。
+    try:
+        import threading
+        threading.Thread(target=_refresh_loop, daemon=True,
+                         name="candle-refresher").start()
+        print(f"  [OK] 主動補 K 線已啟動（每 {REFRESH_INTERVAL_SEC//60} 分檢查、"
+              f"回看 {REFRESH_LOOKBACK_DAYS} 日、只收已收盤的盤）")
+    except Exception as e:
+        print(f"  ⚠ 主動補 K 線啟動失敗（不影響瀏覽）：{type(e).__name__}: {e}")
+    try:
+        app.run(host="0.0.0.0",port=PORT,debug=False)
+    except OSError as e:
+        # 幾乎都是 port 被占用。pythonw 下這行會落在 _logs\trade_review_app.log，
+        # 是排查「排程說在跑、網頁卻打不開」的唯一線索。
+        print(f"  🔴 無法在 port {PORT} 啟動：{e}")
+        print(f"     檢查誰占用了：Get-NetTCPConnection -LocalPort {PORT} -State Listen")
+        raise
