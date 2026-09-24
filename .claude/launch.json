@@ -4,9 +4,7 @@
     {
       "name": "trade-review",
       "runtimeExecutable": "python",
-      "runtimeArgs": [
-        "trade_review_app.py"
-      ],
+      "runtimeArgs": ["trade_review_app.py"],
       "port": 5500
     }
   ]

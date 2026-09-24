@@ -32,8 +32,13 @@ function Log($m) { "$(Get-Date -f 'yyyy-MM-dd HH:mm:ss')  [$Owner] $m" | Add-Con
 if ($Owner -eq 'boss') {
     $paths = @('trades_all.xlsx', '_inbox', 'sync_state.json')
 } else {
+    # 2026-09-24 補上 colors/dividends/events/.claude/*.png/*.txt：
+    # 這些已追蹤檔原本不在任何一方的清單裡（「孤兒檔」）。sync_push 永遠不會
+    # stage 它們，而 sync_pull 的 dirty 閘門看到已追蹤檔有改動就 exit 2，
+    # 於是「請先執行 sync_push」變成死循環 —— 每天的自動拉取其實一直在失敗。
     $paths = @('CS交易紀錄.xlsx', 'CS交易紀錄_dump.txt', 'offset_state.json',
-               'notes', '*.py', '*.md', '*.bat', '*.ps1', '.gitignore', '.gitattributes')
+               'notes', '*.py', '*.md', '*.bat', '*.ps1', '.gitignore', '.gitattributes',
+               'colors.xlsx', 'dividends.xlsx', 'events.xlsx', '.claude', '*.png', '*.txt')
     # 502 推之前先更新 CS 文字側寫，git diff 才看得到帳本改了哪一格
     if (Test-Path (Join-Path $root 'CS交易紀錄.xlsx')) {
         try { & python (Join-Path $root 'dump_cs_text.py') | Out-Null } catch { }
@@ -45,6 +50,19 @@ try {
 
     # 先 stage 自己的改動，pull --rebase 才不會被 unstaged changes 擋掉
     foreach ($p in $paths) { Try-Git add -- $p | Out-Null }
+
+    # 孤兒偵測：已追蹤檔有改動卻沒被 stage，代表它不屬於任何一方的清單。
+    # 這種檔會讓 sync_pull 每天 exit 2 卻沒人知道；一定要讓它出聲。
+    $dirtyAll = @(Invoke-Git -c core.quotepath=false diff --name-only)
+    $stagedNow = @(Invoke-Git -c core.quotepath=false diff --cached --name-only)
+    $orphan = @($dirtyAll | Where-Object { $stagedNow -notcontains $_ -and
+                $_ -notmatch '^(trades_all\.xlsx|_inbox/|sync_state\.json)' })
+    if ($orphan.Count -gt 0) {
+        Say "  [?] 下列已追蹤檔有改動但不屬於任何一方，不會被推送："
+        $orphan | ForEach-Object { Say "      $_" }
+        Say "      它們會讓 sync_pull 每天卡住（exit 2）。請把它們加進 `$paths 或 .gitignore。"
+        Log "ORPHAN dirty-but-unstaged: $($orphan -join ', ')"
+    }
 
     $staged = @(Invoke-Git diff --cached --name-only)
     if ($staged.Count -eq 0) {
