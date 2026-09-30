@@ -31,7 +31,12 @@ function Log($m) { "$(Get-Date -f 'yyyy-MM-dd HH:mm:ss')  $m" | Add-Content $log
 # 對稱處理很重要：Boss 若誤跑了完整 writer（會寫 CS/offset_state），
 # 那些改動不會被 -Owner boss 推出去，就會永遠卡住 Boss 的 pull。
 if ($Owner -eq 'p502') {
-    $foreign = @('trades_all.xlsx', 'sync_state.json', '_inbox')
+    # 2026-09-30：把 trades_all.xlsx 與 sync_state.json 從「對方所有物」移除。
+    # Boss PC 的採集自 2026-08-11 停跑，這兩個檔改由 502 人工維護（見 sync_push.ps1
+    # 同日註解）。留在這裡會被 git checkout -- 丟棄 —— 那等於每次 pull 都把人工
+    # 補進去的帳（已到 2026-09-28）還原成 repo 裡的舊版，是真正的資料損失。
+    # _inbox 仍是 Boss 的原始對帳單，維持丟棄（502 不改它，且未追蹤檔不受影響）。
+    $foreign = @('_inbox')
 } else {
     $foreign = @('CS交易紀錄.xlsx', 'CS交易紀錄_dump.txt', 'offset_state.json', 'notes')
 }

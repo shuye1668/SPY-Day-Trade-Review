@@ -3,6 +3,7 @@
 > **來源機**：`WINDOWS-AUC64IA\ADMIN`，`D:\fileserver_D\TradeReview`
 > **目標機**：另一台電腦的 C 槽（以下用 `{ROOT}` 代表新路徑，例如 `C:\TradeReview`）
 > **盤點日**：2026-09-24（以工作排程器實際註冊值為準，不採 CLAUDE.md 的記憶值）
+> **範圍**：舊機整台退役 → 機器層級總表見 `MIGRATION_ALL_TASKS.md`；本檔是 TradeReview 3 個任務的細節
 > **給誰看**：目標機的 Claude。照 §2 → §0/§3 → §5 跑完即等價還原。
 
 ---
@@ -38,9 +39,17 @@
 
 順序刻意是**先拉再推**：09:30 拉 → 10:00 推 → 11:30 拉 → 12:00 推 → 18:00 補推。
 
-### 其餘 33 個排程：不要重建
+### ⚠️ 範圍已擴大（2026-09-24 更新）
 
-執行體都不在 `TradeReview` 底下，不隨這次搬遷移動。列出來只為了讓你確認沒漏：
+本文件原本假設「只有 TradeReview 搬遷」。實際確認後是**舊機整台退役，全部 30 個任務都要重建**。
+
+> **機器層級的總表與一鍵重建腳本請看 [`MIGRATION_ALL_TASKS.md`](MIGRATION_ALL_TASKS.md)
+> 與 [`rebuild_all_tasks.ps1`](rebuild_all_tasks.ps1)。**
+> 本文件保留為 TradeReview 這 3 個任務的深入說明（雙機所有權、回歸閘門、exit 2 陷阱等），
+> 那些細節在總表裡只有一行摘要。
+
+以下清單原本是「不用重建」的其餘 33 個，現在**全部都要重建**，
+路徑與相依見總表 §2 §4。保留原文供對照：
 
 - **也在 D 槽但屬別的專案**（若那些資料夾沒一起搬，就不在本次範圍）：
   `AIBubble_Daily_Update` / `AIBubble_Dashboard`（`D:\fileserver_D\ai_bubble_monitor`）、

@@ -36,7 +36,16 @@ if ($Owner -eq 'boss') {
     # 這些已追蹤檔原本不在任何一方的清單裡（「孤兒檔」）。sync_push 永遠不會
     # stage 它們，而 sync_pull 的 dirty 閘門看到已追蹤檔有改動就 exit 2，
     # 於是「請先執行 sync_push」變成死循環 —— 每天的自動拉取其實一直在失敗。
+    # 2026-09-30 所有權變更：trades_all.xlsx 與 sync_state.json 改為 502 所有。
+    # 原因：Boss PC 的採集腳本自 2026-08-11 起停跑（sync_state.json 自己的 note 就是
+    # 這樣寫的），此後 trades_all 一直由 502 人工維護（帳本已寫到 2026-09-28）。
+    # 若繼續當成 Boss 所有物，會同時踩到兩個坑：
+    #   ① sync_push 不 stage 它們 → 永遠推不出去 → sync_pull 天天 exit 2 靜默停擺
+    #   ② sync_pull 會 git checkout -- 把它們丟棄 → 人工補的帳直接被還原掉
+    # ⚠️ 前提：Boss PC 不得再以 -Owner boss 推這兩個檔。若 Boss 日後復活，
+    #    必須先決定由誰維護 trades_all，再把這裡與 sync_pull.ps1 的 $foreign 一起改回。
     $paths = @('CS交易紀錄.xlsx', 'CS交易紀錄_dump.txt', 'offset_state.json',
+               'trades_all.xlsx', 'sync_state.json',
                'notes', '*.py', '*.md', '*.bat', '*.ps1', '.gitignore', '.gitattributes',
                'colors.xlsx', 'dividends.xlsx', 'events.xlsx', '.claude', '*.png', '*.txt')
     # 502 推之前先更新 CS 文字側寫，git diff 才看得到帳本改了哪一格
@@ -55,8 +64,11 @@ try {
     # 這種檔會讓 sync_pull 每天 exit 2 卻沒人知道；一定要讓它出聲。
     $dirtyAll = @(Invoke-Git -c core.quotepath=false diff --name-only)
     $stagedNow = @(Invoke-Git -c core.quotepath=false diff --cached --name-only)
+    # 2026-09-30：原本把 trades_all / sync_state 也排除在孤兒警告之外（因為當時它們
+    # 屬於 Boss）。現在它們已納入 502 的 $paths，就不該再豁免 —— 否則哪天它們沒被
+    # stage，這支又會安靜放過去。只保留 _inbox/（仍是 Boss 的原始對帳單）。
     $orphan = @($dirtyAll | Where-Object { $stagedNow -notcontains $_ -and
-                $_ -notmatch '^(trades_all\.xlsx|_inbox/|sync_state\.json)' })
+                $_ -notmatch '^_inbox/' })
     if ($orphan.Count -gt 0) {
         Say "  [?] 下列已追蹤檔有改動但不屬於任何一方，不會被推送："
         $orphan | ForEach-Object { Say "      $_" }

@@ -816,6 +816,19 @@ def _add_no_cache(resp):
 
 SYNC_STATE_FILE=_os.path.join(ROOT_FOLDER,"sync_state.json")
 
+def ledger_currency():
+    """trades_all.xlsx 的實際最新交易日 —— 帳本新鮮度的唯一真相源。
+
+    先前 UI 的「資料截至」讀 sync_state.json，但那是採集腳本的心跳。腳本自
+    2026-08-11 停跑後永遠回報 08-10，帳本明明已寫到 09-28 仍一直顯示落後 35 天。
+    帳本內容與採集心跳是兩條獨立的鏈，任一條壞掉都不該蓋掉另一條的真相。
+    """
+    df=load_trades_df()
+    if df is None or "Date" not in df.columns:return None
+    ds=[d for d in (_norm_date(v) for v in df["Date"].dropna().unique()) if d]
+    if not ds:return None
+    return {"latest":max(ds),"rows":int(len(df))}
+
 @app.route("/api/version")
 def api_version():
     """Return data-file mtimes so the client can auto-detect edits and reload.
@@ -836,7 +849,10 @@ def api_version():
     candles=None
     try:candles=candle_currency()
     except Exception as e:candles={"error":f"{type(e).__name__}: {e}"}
-    return jsonify({"trades":_mt(TRADES_FILE),"sync":sync,"candles":candles})
+    ledger=None
+    try:ledger=ledger_currency()
+    except Exception as e:ledger={"error":f"{type(e).__name__}: {e}"}
+    return jsonify({"trades":_mt(TRADES_FILE),"sync":sync,"candles":candles,"ledger":ledger})
 
 @app.route("/")
 def index():return HTML
@@ -1003,9 +1019,10 @@ canvas{display:block;width:100%;height:100%}
 #dlist .di-empty{padding:10px 12px;font-size:12px;color:#7A8290}
 .hint{margin-left:20px;color:#6B7280;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #cdlbadge{margin-left:auto;margin-right:12px;font-size:11px;font-weight:bold;white-space:nowrap;cursor:default}
+#ledgerbadge{margin-right:14px;font-size:11px;font-weight:bold;white-space:nowrap;cursor:default}
 #syncbadge{margin-right:14px;font-size:11px;font-weight:bold;white-space:nowrap;cursor:default}
 </style></head><body>
-<div id="hdr"><span class="tk">SPY US Equity</span><span class="hint">拖曳平移（跨日無縫）｜ 滾輪/+- 縮放 ｜ ← → 切日期 ｜ 雙擊文字框編輯 ｜ 底部/右側邊緣拖曳可縮放軸</span><span id="cdlbadge" style="display:none"></span><span id="syncbadge" style="display:none"></span><span class="lbl">Intraday Candle Chart</span></div>
+<div id="hdr"><span class="tk">SPY US Equity</span><span class="hint">拖曳平移（跨日無縫）｜ 滾輪/+- 縮放 ｜ ← → 切日期 ｜ 雙擊文字框編輯 ｜ 底部/右側邊緣拖曳可縮放軸</span><span id="cdlbadge" style="display:none"></span><span id="ledgerbadge" style="display:none"></span><span id="syncbadge" style="display:none"></span><span class="lbl">Intraday Candle Chart</span></div>
 <div id="tb">
 <button id="bp" title="前一個交易日（← 鍵）">&#8592; Prev</button>
 <span id="dwrap" title="可直接輸入數字；↑↓ 切換前後交易日；點日曆圖示選日期"><span id="dbox"><input class="dseg" id="dY" maxlength="4" inputmode="numeric" autocomplete="off" spellcheck="false"><span class="dsep">-</span><input class="dseg" id="dM" maxlength="2" inputmode="numeric" autocomplete="off" spellcheck="false"><span class="dsep">-</span><input class="dseg" id="dD" maxlength="2" inputmode="numeric" autocomplete="off" spellcheck="false"></span><button id="dtog" title="開啟日曆">&#128197;</button></span>
@@ -3182,14 +3199,14 @@ async function refreshData(){
 let _dataVer=null,_verBusy=false;
 async function seedDataVersion(){
   try{const r=await fetch("/api/version",{cache:"no-store"});const j=await r.json();
-    _dataVer=j.trades;renderSyncBadge(j.sync,j.candles);}catch(e){}
+    _dataVer=j.trades;renderSyncBadge(j.sync,j.candles,j.ledger);}catch(e){}
 }
 async function checkDataVersion(){
   if(_verBusy||_exporting||exportMode)return;  // never yank data out from under an export
   _verBusy=true;
   try{
     const r=await fetch("/api/version",{cache:"no-store"});const j=await r.json();const v=j.trades;
-    renderSyncBadge(j.sync,j.candles);
+    renderSyncBadge(j.sync,j.candles,j.ledger);
     if(_dataVer===null){_dataVer=v;}
     else if(v!==_dataVer){_dataVer=v;await refreshData();showToast("資料已更新");}
   }catch(e){}finally{_verBusy=false;}
@@ -3250,25 +3267,49 @@ function renderCandleBadge(c){
   }
 }
 
-function renderSyncBadge(s,c){
+// 帳本新鮮度：直接讀 trades_all 的實際最新交易日，完全不經 sync_state.json。
+// 2026-09-29 從 syncbadge 拆出 —— 原本那顆讀 sync_state.last_trade_date，採集腳本
+// 自 2026-08-11 停跑後就永遠顯示「資料截至 2026-08-10 ✕落後 35 個交易日」，
+// 即使帳本已寫到 09-28 也一樣紅。混成一顆的結果是兩個真相都看不準。
+function renderLedgerBadge(l){
+  const el=document.getElementById("ledgerbadge");
+  if(!el)return;
+  if(!l||!l.latest){el.style.display="none";return;}
+  el.style.display="";
+  const behind=tradingDaysBehind(l.latest);
+  let color="#6B7280",txt=`帳本最新 ${l.latest}`;
+  if(behind>=2){color="#FF4444";txt+=` ✕落後 ${behind} 個交易日`;}
+  else if(behind===1){color="#E0A800";txt+=" ⚠待補前一交易日";}
+  el.style.color=color;
+  el.textContent=txt;
+  el.title=`trades_all.xlsx 實際最新交易日=${l.latest}（共 ${l.rows} 列）\n`
+           +`最新美股交易日=${getLatestUSTradeDate()}  落後=${behind}\n`
+           +`只反映帳本內容，與採集腳本心跳無關。`;
+}
+
+function renderSyncBadge(s,c,l){
   renderCandleBadge(c);
+  renderLedgerBadge(l);
   const el=document.getElementById("syncbadge");
   if(!el)return;
   if(!s||!s.updated_utc){el.style.display="none";return;}
   el.style.display="";
-  const behind=tradingDaysBehind(s.last_trade_date);
-  let color="#6B7280",txt=`資料截至 ${s.last_trade_date||"?"}`;
+  const ageD=(Date.now()-Date.parse(s.updated_utc))/86400000;
+  let color="#6B7280",txt=`同步 ${s.host||"?"}`;
   if(s.status==="blocked"){color="#E0A800";txt+=" ⚠需人工確認";}
   else if(s.status==="failed"){color="#FF4444";txt+=" ✕採集失敗";}
-  // 落後 1 個交易日是正常待處理（例：週一早上，週五的帳還沒補）
-  else if(behind>=2){color="#FF4444";txt+=` ✕落後 ${behind} 個交易日`;}
-  else if(behind===1){color="#E0A800";txt+=" ⚠待補前一交易日";}
+  // 這顆只講「採集腳本多久沒跑」。帳本多舊由 ledgerbadge 負責 —— 兩條鏈分開報，
+  // 否則採集腳本一停就把「帳本其實是最新的」這個事實蓋掉（2026-08~09 就是這樣）。
+  else if(ageD>=3){color="#FF4444";txt+=` ✕停擺 ${Math.floor(ageD)} 天`;}
+  else if(ageD>=1.5){color="#E0A800";txt+=` ⚠${Math.floor(ageD)} 天未更新`;}
+  else{txt+=" ✓";}
   el.style.color=color;
   el.textContent=txt;
   const ageH=Math.floor((Date.now()-Date.parse(s.updated_utc))/3600000);
-  el.title=`status=${s.status||"?"}  host=${s.host||"?"}\n`
-           +`最新美股交易日=${getLatestUSTradeDate()}  落後=${behind}\n`
-           +`updated=${s.updated_utc}（${ageH}h 前）`
+  el.title=`採集腳本心跳（與帳本新舊無關 —— 帳本看左邊那顆）\n`
+           +`status=${s.status||"?"}  host=${s.host||"?"}\n`
+           +`updated=${s.updated_utc}（${ageH}h 前）\n`
+           +`該次寫入時 trades_all 最新=${s.latest_in_trades_all||"?"}`
            +(s.note?`\n${s.note}`:"");
 }
 setInterval(checkDataVersion,4000);                 // poll every 4s
