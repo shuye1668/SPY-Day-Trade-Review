@@ -1,5 +1,5 @@
 @echo off
-cd /d C:\TradeReview
+cd /d "%~dp0"
 start python trade_review_app.py
 :wait
 timeout /t 1 /nobreak >nul

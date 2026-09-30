@@ -60,7 +60,7 @@ needs_review），一條都沒放寬。詳見 §〇。**
 ## 〇、雙機架構與同步（2026-08-10 起）
 
 ```
-Boss PC（交易機，C:\TradeReview）              502（D:\fileserver_D\TradeReview）
+Boss PC（交易機，C:\TradeReview）              502＝SHUYE07（D:\fileserver\書業(新)\7.2026年討論後例行更新檔\TradeReview）
 ────────────────────────────────              ──────────────────────────────────
 TOS → 採集（CSV 匯出為主／OCR 備援）
   ├─ engine 乾跑（§1b BALANCE 閘門）

@@ -47,7 +47,7 @@ set "RC=0"
 
 rem -- work in the folder this .bat lives in (pushd also handles UNC paths) ----
 pushd "%~dp0" 2>nul || (
-  echo [FATAL] cannot enter script folder: %~dp0
+  echo [FATAL] cannot enter script folder: "%~dp0"
   pause
   exit /b 1
 )
