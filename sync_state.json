@@ -1,8 +1,8 @@
 {
   "last_trade_date": "2026-09-28",
-  "status": "ok",
-  "note": "2026-09-29 由本機手動更新。Boss PC 採集腳本自 2026-08-11 停跑，此心跳原本凍在 08-10，而帳本實際已寫到 09-28。同日已把 UI 的「帳本最新」與「同步心跳」拆成兩顆獨立徽章，帳本新舊改由 trades_all 內容直接導出，不再受本檔影響。",
-  "updated_utc": "2026-09-29T02:37:34Z",
-  "host": "WINDOWS-AUC64IA",
+  "status": "blocked",
+  "note": "2026-10-05 SHUYE07 檢查：帳本停在 9/28。①9/29 已收到對帳單，但是平掉 9/28 留倉（SOLD 100 @763.5509）＋利息 0.74，writer 依 §0 拒寫，待人工確認；②9/30、10/1、10/2 沒有收到 [SPY-DayTrade-Autosend] 對帳單草稿（Boss PC 10/1 那份是錯誤帳戶 58715520SCHW）。舊 502（WINDOWS-AUC64IA）已退役，此心跳改由 SHUYE07 每日 routine 寫入。",
+  "updated_utc": "2026-10-05T03:36:04Z",
+  "host": "SHUYE07",
   "latest_in_trades_all": "2026-09-28"
 }

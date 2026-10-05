@@ -6,7 +6,11 @@
 記下「最後成功寫入的交易日 + 時間」，隨 git 一起同步，App 標頭就能顯示
 「資料截至 X」，超時轉紅。這是對齊 CLAUDE.md §0「絕不靜默」的必要件。
 
-用法（Boss PC，writer 成功之後）：
+2026-10-05 起：舊 502（WINDOWS-AUC64IA）退役、Boss PC 的 git 自 2026-08-11 停住，
+改由 SHUYE07 的 spy-daytrade-auto-csv routine 每次跑完呼叫（host 會是 SHUYE07；
+成功 ok、writer 拒寫 blocked、拿不到對帳單 failed）。
+
+用法（writer 成功之後）：
     python write_sync_state.py --date 2026-08-10
     python write_sync_state.py --date 2026-08-10 --status blocked --note "留倉需人工確認"
 """
