@@ -1,8 +1,8 @@
 {
-  "last_trade_date": "2026-09-28",
-  "status": "blocked",
-  "note": "2026-10-05 SHUYE07 檢查：帳本停在 9/28。①9/29 已收到對帳單，但是平掉 9/28 留倉（SOLD 100 @763.5509）＋利息 0.74，writer 依 §0 拒寫，待人工確認；②9/30、10/1、10/2 沒有收到 [SPY-DayTrade-Autosend] 對帳單草稿（Boss PC 10/1 那份是錯誤帳戶 58715520SCHW）。舊 502（WINDOWS-AUC64IA）已退役，此心跳改由 SHUYE07 每日 routine 寫入。",
-  "updated_utc": "2026-10-05T03:36:04Z",
+  "last_trade_date": "2026-10-02",
+  "status": "ok",
+  "note": "2026-10-05 使用者確認：9/29 平 9/28 留倉 -257.00 已補；58715520SCHW 9/29 買2筆、10/1 及 10/2 平倉已補；9/30–10/2 當沖帳戶無交易",
+  "updated_utc": "2026-10-05T05:03:19Z",
   "host": "SHUYE07",
-  "latest_in_trades_all": "2026-09-28"
+  "latest_in_trades_all": "2026-10-02"
 }
