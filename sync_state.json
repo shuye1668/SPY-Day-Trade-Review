@@ -1,8 +1,8 @@
 {
   "last_trade_date": "2026-10-02",
   "status": "failed",
-  "note": "2026-10-06 06:47 找不到 2026-10-05 交易日的 [SPY-DayTrade-Autosend] 草稿（最新草稿為 10/02 匯出，已入帳）；Boss PC 今晨未產出匯出",
-  "updated_utc": "2026-10-06T02:42:09Z",
+  "note": "2026-10-13 06:47 找不到 2026-10-12 [SPY-DayTrade-Autosend] 草稿；最新草稿仍為 10/02（已入帳）。查詢：list_drafts subject:SPY-DayTrade-Autosend、search_threads in:draft newer_than:10d。10/05-10/12 交易日皆無草稿，Boss PC 匯出疑似停擺",
+  "updated_utc": "2026-10-13T00:43:58Z",
   "host": "SHUYE07",
   "latest_in_trades_all": "2026-10-02"
 }
