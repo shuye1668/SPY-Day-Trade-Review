@@ -1,0 +1,58 @@
+﻿Account Statement for 58715520SCHW (Individual) since 9/24/26 through 9/30/26
+
+Cash Balance
+DATE,TIME,TYPE,REF #,DESCRIPTION,Misc Fees,Commissions & Fees,AMOUNT,BALANCE
+9/24/26,13:00:00,BAL,,Cash balance at the start of business day 24.09 CST,,,,"2,381,907.28"
+9/25/26,13:00:00,BAL,,Cash balance at the start of business day 25.09 CST,,,,"2,381,907.28"
+9/26/26,13:00:00,BAL,,Cash balance at the start of business day 26.09 CST,,,,"2,381,907.28"
+9/27/26,13:00:00,BAL,,Cash balance at the start of business day 27.09 CST,,,,"2,381,907.28"
+9/28/26,13:00:00,BAL,,Cash balance at the start of business day 28.09 CST,,,,"2,381,907.28"
+9/29/26,13:00:00,BAL,,Cash balance at the start of business day 29.09 CST,,,,"2,381,907.28"
+9/29/26,21:44:11,TRD,="1008096491614",BOT +100 SPY @765.0957,,,"-76,509.57","2,305,397.71"
+9/29/26,22:00:39,TRD,="1008097495193",BOT +100 SPY @765.5699,,,"-76,556.99","2,228,840.72"
+9/30/26,08:02:45,DOI,="132079671875",SCHWAB1 INT 08/28-09/28 20.8 US$,,,20.80,"2,228,861.52"
+9/30/26,13:00:00,BAL,,Cash balance at the start of business day 30.09 CST,,,,"2,381,907.28"
+,,,,TOTAL,,,"($153,045.76)","$2,381,907.28"
+
+Futures Statements
+Trade Date,Exec Date,Exec Time,Type,Ref #,Description,Misc Fees,Commissions & Fees,Amount,Balance
+
+ 
+"Total Cash $2,228,861.52"
+
+
+Forex Statements
+,Date,Time,Type,Ref #,Description,Commissions & Fees,Amount,Amount(USD),Balance
+
+"Crypto # (Crypto offered by Charles Schwab Premier Bank, SSB) Statements"
+Trade Date,Exec Date,Exec Time,Type,Ref #,Description,Commissions & Fees,Amount,Balance
+
+Account Order History
+Notes,,Time Placed,Spread,Side,Qty,Pos Effect,Symbol,Exp,Strike,Type,PRICE,,TIF,Status
+,,9/29/26 22:00:39,STOCK,BUY,+100,TO OPEN,SPY,,,ETF,~,MKT,DAY,FILLED
+,,9/29/26 21:44:10,STOCK,BUY,+100,TO OPEN,SPY,,,ETF,~,MKT,DAY,FILLED
+
+Account Trade History
+,Exec Time,Spread,Side,Qty,Pos Effect,Symbol,Exp,Strike,Type,Price,Net Price,Order Type
+,9/29/26 22:00:39,STOCK,BUY,+100,TO OPEN,SPY,,,ETF,765.5699,765.5699,MKT
+,9/29/26 21:44:11,STOCK,BUY,+100,TO OPEN,SPY,,,ETF,765.0957,765.0957,MKT
+
+Equities
+Symbol,Description,Qty,Trade Price
+SPY,State Street SPDR S&P 500 ETF Trust,+1300,583.9743
+,OVERALL TOTALS,,
+
+Profits and Losses
+Symbol,Description,P/L Open,P/L %,P/L Day,P/L YTD,P/L Diff,Margin Req,Mark Value
+SPY,State Street SPDR S&P 500 ETF Trust,"$233,721.47",+30.79%,($572.00),"$89,709.44","($4,076.56)",$0.00,"$992,888.00"
+,OVERALL TOTALS,"$233,721.47",+30.79%,($572.00),"$89,709.44","($4,076.56)",$0.00,"$992,888.00"
+
+Account Summary
+Net Liquidating Value,"$3,221,749.52"
+Stock Buying Power,"$2,228,861.52"
+Option Buying Power,"$2,228,861.52"
+Intraday Buying Power,N/A
+Equity Commissions & Fees YTD,$0.00
+Futures Commissions & Fees YTD,$0.00
+Crypto Trading Fees YTD,N/A
+Total Commissions & Fees YTD,$0.00

@@ -1,0 +1,55 @@
+﻿Account Statement for 51489806SCHW (Individual) since 8/22/26 through 8/28/26
+
+Cash Balance
+DATE,TIME,TYPE,REF #,DESCRIPTION,Misc Fees,Commissions & Fees,AMOUNT,BALANCE
+8/22/26,13:00:00,BAL,,Cash balance at the start of business day 22.08 CST,,,,"115,848.03"
+8/23/26,13:00:00,BAL,,Cash balance at the start of business day 23.08 CST,,,,"115,848.03"
+8/24/26,13:00:00,BAL,,Cash balance at the start of business day 24.08 CST,,,,"115,848.03"
+8/25/26,13:00:00,BAL,,Cash balance at the start of business day 25.08 CST,,,,"115,848.03"
+8/26/26,13:00:00,BAL,,Cash balance at the start of business day 26.08 CST,,,,"115,848.03"
+8/27/26,13:00:00,BAL,,Cash balance at the start of business day 27.08 CST,,,,"115,848.03"
+8/28/26,13:00:00,BAL,,Cash balance at the start of business day 28.08 CST,,,,"115,848.03"
+,,,,TOTAL,,,,"$115,848.03"
+
+Futures Statements
+Trade Date,Exec Date,Exec Time,Type,Ref #,Description,Misc Fees,Commissions & Fees,Amount,Balance
+
+ 
+"Total Cash $115,848.03"
+
+
+Forex Statements
+,Date,Time,Type,Ref #,Description,Commissions & Fees,Amount,Amount(USD),Balance
+
+"Crypto # (Crypto offered by Charles Schwab Premier Bank, SSB) Statements"
+Trade Date,Exec Date,Exec Time,Type,Ref #,Description,Commissions & Fees,Amount,Balance
+
+Account Order History
+Notes,,Time Placed,Spread,Side,Qty,Pos Effect,Symbol,Exp,Strike,Type,PRICE,,TIF,Status
+
+Account Trade History
+,Exec Time,Spread,Side,Qty,Pos Effect,Symbol,Exp,Strike,Type,Price,Net Price,Order Type
+
+Equities
+Symbol,Description,Qty,Trade Price
+SPY,State Street SPDR S&P 500 ETF Trust,+3000,772.3411
+,OVERALL TOTALS,,
+
+Profits and Losses
+Symbol,Description,P/L Open,P/L %,P/L Day,P/L YTD,P/L Diff,Margin Req,Mark Value
+AMD,ADVANCED MICRO DEVIC,$0.00,0.00%,$0.00,($57.99),$0.00,$0.00,$0.00
+NVDA,NVIDIA CORP,$0.00,0.00%,$0.00,($71.99),$0.00,$0.00,$0.00
+QQQ,INVESCO QQQ TR,$0.00,0.00%,$0.00,$20.94,$0.00,$0.00,$0.00
+SPCX,SPACE EX TECH SPACEX A,$0.00,0.00%,$0.00,$132.00,$0.00,$0.00,$0.00
+SPY,State Street SPDR S&P 500 ETF Trust,"($4,203.29)",-0.18%,($480.00),"$275,870.84","$15,659.73","$578,205.00","$2,312,820.00"
+,OVERALL TOTALS,"($4,203.29)",-0.18%,($480.00),"$275,893.80","$15,659.73","$578,205.00","$2,312,820.00"
+
+Account Summary
+Net Liquidating Value,"$2,428,668.03"
+Stock Buying Power,"$2,565,336.00"
+Option Buying Power,"$1,282,668.00"
+Intraday Buying Power,"$7,401,852.12"
+Equity Commissions & Fees YTD,$954.49
+Futures Commissions & Fees YTD,$0.00
+Crypto Trading Fees YTD,N/A
+Total Commissions & Fees YTD,$954.49
