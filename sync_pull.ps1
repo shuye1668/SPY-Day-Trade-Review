@@ -38,7 +38,12 @@ if ($Owner -eq 'p502') {
     # _inbox 仍是 Boss 的原始對帳單，維持丟棄（502 不改它，且未追蹤檔不受影響）。
     $foreign = @('_inbox')
 } else {
-    $foreign = @('CS交易紀錄.xlsx', 'CS交易紀錄_dump.txt', 'offset_state.json', 'notes')
+    # 2026-10-16 所有權定案：trades_all.xlsx 與 sync_state.json 歸 502（見 sync_push.ps1
+    # 同日註解）。Boss 本機的 writer --trades-only 與 write_sync_state 仍會改這兩個檔，
+    # 但那些改動不具權威性 —— pull 前丟棄，以 502 推上來的版本為準。
+    # 不丟棄的話 Boss 的 pull 會天天 exit 2（sync_push -Owner boss 已不 stage 它們），死鎖重演。
+    $foreign = @('CS交易紀錄.xlsx', 'CS交易紀錄_dump.txt', 'offset_state.json', 'notes',
+                 'trades_all.xlsx', 'sync_state.json')
 }
 
 try {

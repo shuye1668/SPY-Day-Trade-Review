@@ -398,6 +398,42 @@ subject:"[SPY-DayTrade-Autosend] $today"
 
 ---
 
+> ⚠️ **本母版已知過時（2026-10-16）**：Boss PC 本機的 SKILL 在 2026-10-16 當天由使用者
+> 另行改版（9.0 改為文字對照表、有新成交才直接寄 juliahsu13 等），尚未回寫到本檔。
+> 在用 Boss 端現行全文刷新本檔之前，**不要再拿本檔整檔取代 Boss 端**。
+> 下方「9.0b」是 2026-10-16 經裁決後唯一要新增到 Boss 端的段落（不附件、不碰寄信規則），
+> Boss 端已於同日插入其 SKILL 第 458–463 行，並在寫入白名單加了 `verify_shots\TOS_verify_*.png` 一列。
+>
+> **Boss 端 2026-10-16 回報、本檔尚未反映的漂移**（刷新全文時要核對）：
+> 1. 9.0b 實際掛在步驟 9 內，而步驟 9 只在「有新成交」時執行 → 實際效果＝有新成交才截圖（與意圖相符，敘述要對齊）。
+> 2. Boss 端 `C:\TradeReview_Boss\CLAUDE.md` 尚無 9.0b —— 兩份規則又有差異，刷新時一併處理。
+> 3. 步驟 3/10 頁籤座標已變：主頁籤列 y≈33、Charts x≈557（本檔仍寫 y≈52、x=336）；且每次點擊前要先確認 TOS 在前景。
+> 4. 步驟 4「把天數改成 5」作廢：改 days back 欄位曾讓 TOS 當掉，實際做法＝N≥5 就不動。
+> 5. 步驟 9.5 推送清單要加 `verify_shots\`（502 端 sync_push.ps1 已加，Boss pull 後生效）。
+
+## 【步驟 9.0b】驗證截圖本機留存（2026-10-16 起，當日 CSV 含至少一列 TRD 才做）
+
+目的：502/SHUYE07 端把這張圖貼進 Julia 的 Excel 母檔，讓讀者對照 TOS 原始畫面核驗
+帳上數字。**不把圖附進任何信件或草稿**（base64 超過可靠處理長度，實測 144KB≈19 萬字元），
+傳輸只靠 git：圖存進 `C:\TradeReview\verify_shots\`，git 修復後隨 `sync_push -Owner boss`
+自動帶給 502。**純 BAL 無交易日直接略過本步驟。**
+
+**擷取範圍定義** —— 必須完整入鏡三個區塊、每一列都要在：
+- ① **Cash Balance** 表格：表頭＋所有列（含 BAL / TRD / DOI / JRN / TOTAL）
+- ② **Order History**：標題列（N working, N filled）＋所有 FILLED 列
+- ③ **Trade History**：標題列＋所有 fill 列
+- 中間夾著的空白 section 一併入鏡沒關係；不可有對話框/tooltip 遮擋。
+- **不要為了截圖去動日期範圍欄位**（改 days back 曾讓 TOS 當掉）；現有範圍涵蓋即可。
+
+**做法**：優先從流程中已確認過的全螢幕截圖**裁切**（避免重拍時視窗搶前景）；
+必要時 `Capture-Region`。存 `C:\TradeReview_Boss\logs\TOS_verify_$today.png`，
+一張放不下分段存 `_b.png`/`_c.png`。每張 view 核對：最後一列入鏡、數字清晰、無遮擋。
+完成後複製到 `C:\TradeReview\verify_shots\TOS_verify_$today.png`（資料夾不存在就建；
+**不放 `_inbox\`**，那裡只放 CSV）。失敗一律**非致命**：log 註記
+`Screenshot: FAILED - <原因>`，流程照常。
+
+---
+
 ## 【步驟 9】建 Gmail 草稿
 
 用 Gmail MCP 的 `create_draft`：
@@ -612,6 +648,7 @@ Charts 收尾失敗但其餘成功：
 
 | 日期 | 變更 |
 |---|---|
+| 2026-10-16 | 新增步驟 9.0b：有 TRD 的交易日擷取驗證截圖存 `verify_shots\`（供 502 貼入 Julia Excel 母檔）；**不附進信件**（base64 超長不可靠）、不動日期範圍欄位、不放 _inbox。同日註記：本母版相對 Boss 端已過時，待 Boss 匯出現行全文刷新 |
 | 2026-08-11 | **整併為單一權威檔**。原本排程 SKILL.md 內嵌 07-17 的 OCR-only 流程，與 `C:\TradeReview_Boss\CLAUDE.md` 的新規則衝突（前者禁止 CSV 匯出與寫入 `C:\TradeReview\`），直接指令勝出，導致步驟 6.5／9.5 從未執行、每天人工補帳 |
 | 2026-08-11 | 補上 ExecutionPolicy 繞過寫法（本機全 scope Undefined＝實際 Restricted） |
 | 2026-08-10 | 改回 CSV 為主：引擎改依欄名對應，直接吃 TOS 原生 10 欄，不需轉換 |

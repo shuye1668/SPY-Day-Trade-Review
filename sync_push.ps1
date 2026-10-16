@@ -30,7 +30,15 @@ function Log($m) { "$(Get-Date -f 'yyyy-MM-dd HH:mm:ss')  [$Owner] $m" | Add-Con
 
 # 只 stage 自己擁有的路徑，絕不 git add -A
 if ($Owner -eq 'boss') {
-    $paths = @('trades_all.xlsx', '_inbox', 'sync_state.json')
+    # 2026-10-16 所有權定案（完成 2026-09-30 的未決事項）：trades_all.xlsx 與
+    # sync_state.json 歸 502 維護（自 8/11 起實質如此），Boss 一律不推。
+    # Boss 只推三樣：
+    #   _inbox\              原始對帳單 CSV（源頭在 Boss）
+    #   verify_shots\        每交易日 TOS 驗證截圖 PNG（502 端貼進 Julia 母檔供讀者核帳；
+    #                        Gmail base64 附件實測超過 Boss Claude 可靠處理長度，git 是唯一自動通道）
+    #   BOSS_SKILL_current.md  Boss 端排程 SKILL 的現行全文副本（502 端母版靠它刷新，
+    #                          Boss 每次改自己的 SKILL 後要重新複製一份進 repo）
+    $paths = @('_inbox', 'verify_shots', 'BOSS_SKILL_current.md')
 } else {
     # 2026-09-24 補上 colors/dividends/events/.claude/*.png/*.txt：
     # 這些已追蹤檔原本不在任何一方的清單裡（「孤兒檔」）。sync_push 永遠不會
@@ -67,8 +75,12 @@ try {
     # 2026-09-30：原本把 trades_all / sync_state 也排除在孤兒警告之外（因為當時它們
     # 屬於 Boss）。現在它們已納入 502 的 $paths，就不該再豁免 —— 否則哪天它們沒被
     # stage，這支又會安靜放過去。只保留 _inbox/（仍是 Boss 的原始對帳單）。
+    # 2026-10-16：Boss 端 trades_all/sync_state 是「502 所有物被本機程序改動」的常態
+    # （writer --trades-only 與 write_sync_state 仍在 Boss 本機跑），不是孤兒 —— 它們由
+    # Boss 端 sync_pull 的 $foreign 清單丟棄，不該天天觸發孤兒警告。
+    $orphanExempt = if ($Owner -eq 'boss') { '^(_inbox/|trades_all\.xlsx$|sync_state\.json$)' } else { '^_inbox/' }
     $orphan = @($dirtyAll | Where-Object { $stagedNow -notcontains $_ -and
-                $_ -notmatch '^_inbox/' })
+                $_ -notmatch $orphanExempt })
     if ($orphan.Count -gt 0) {
         Say "  [?] 下列已追蹤檔有改動但不屬於任何一方，不會被推送："
         $orphan | ForEach-Object { Say "      $_" }
