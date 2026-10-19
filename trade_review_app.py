@@ -887,7 +887,9 @@ def api_version():
     ledger=None
     try:ledger=ledger_currency()
     except Exception as e:ledger={"error":f"{type(e).__name__}: {e}"}
-    return jsonify({"trades":_mt(TRADES_FILE),"sync":sync,"candles":candles,"ledger":ledger})
+    # trades 欄位是客戶端的「資料版本 token」（只比相等）：併入每日重點 xlsb 的 mtime，
+    # 使用者更新 高低檔觀察指標 後 4 秒內開著的頁面會自動 refreshData（2026-10-19 加）。
+    return jsonify({"trades":_mt(TRADES_FILE)+_mt(NEWS_XLSB),"sync":sync,"candles":candles,"ledger":ledger})
 
 @app.route("/")
 def index():return HTML
