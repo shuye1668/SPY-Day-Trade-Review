@@ -61,6 +61,41 @@ HISTORY_FILE = _os.path.join(ROOT_FOLDER, "history_minute.xlsx")
 # Cached per-date history: {date_str: [bars]} and mtime for invalidation
 _history_cache = {"mtime": None, "by_date": None}
 
+# 每日中文重點（儀表板說明區自動帶出；2026-10-19 加，使用者指定）
+# 來源：高低檔觀察指標.xlsb → NEWS TITLES(值) 分頁，A欄=日期序號(1899-12-30 基準)、F欄=中文重點
+NEWS_XLSB = r"D:\fileserver\書業(新)\7.例行更新檔\5.高低檔觀察指標.xlsb"
+_news_cache = {"mtime": None, "by_date": {}}
+
+def _load_news_by_date():
+    """讀 NEWS TITLES(值) 的每日中文重點，傳回 {YYYY-MM-DD: text}。
+    mtime 不變直接用快取；pyxlsb 缺少或檔案不可讀時安靜回空 dict（儀表板照常跑）。"""
+    try:
+        mtime = _os.path.getmtime(NEWS_XLSB)
+    except OSError:
+        return {}
+    if _news_cache["mtime"] == mtime:
+        return _news_cache["by_date"]
+    try:
+        from pyxlsb import open_workbook as _oxlsb
+        import datetime as _ndt
+        _base = _ndt.date(1899, 12, 30)
+        by_date = {}
+        with _oxlsb(NEWS_XLSB) as _nwb:
+            with _nwb.get_sheet("NEWS TITLES(值)") as _nws:
+                for _nrow in _nws.rows():
+                    _ncells = {c.c: c.v for c in _nrow}
+                    _nd = _ncells.get(0)
+                    _nt = _ncells.get(5)
+                    if isinstance(_nd, float) and isinstance(_nt, str) and _nt.strip():
+                        by_date[(_base + _ndt.timedelta(days=int(_nd))).isoformat()] = _nt.strip()
+        _news_cache["mtime"] = mtime
+        _news_cache["by_date"] = by_date
+        print(f"[news] loaded {len(by_date)} daily summaries from NEWS TITLES(值)")
+        return by_date
+    except Exception as e:
+        print(f"[news] load failed: {e}")
+        return _news_cache["by_date"] or {}
+
 def _load_history_by_date():
     """Load history_minute.xlsx and group by date.
     Returns dict {YYYY-MM-DD: [{t,o,h,l,c,v}, ...]} with HH:MM time strings (EDT).
@@ -889,14 +924,16 @@ def api_data():
     notes=""
     if os.path.exists(notes_path):
         with open(notes_path,"r",encoding="utf-8") as f:notes=f.read()
+    try:news=_load_news_by_date().get(ds,"")
+    except Exception:news=""
     try:c=fetch_intraday(TICKER,ds)
-    except:return jsonify({"date":ds,"candles":[],"trades":[],"notes":notes,"noTrading":True})
-    if not c:return jsonify({"date":ds,"candles":[],"trades":[],"notes":notes,"noTrading":True})
+    except:return jsonify({"date":ds,"candles":[],"trades":[],"notes":notes,"news":news,"noTrading":True})
+    if not c:return jsonify({"date":ds,"candles":[],"trades":[],"notes":notes,"news":news,"noTrading":True})
     try:t=read_and_pair_for_date(ds)
     except Exception as e:
         print(f"[api_data] read_and_pair_for_date error: {e}")
         t=[]
-    return jsonify({"date":ds,"candles":c,"trades":t,"notes":notes,"noTrades":len(t)==0})
+    return jsonify({"date":ds,"candles":c,"trades":t,"notes":notes,"news":news,"noTrades":len(t)==0})
 
 @app.route("/api/notes",methods=["POST"])
 def api_notes():
@@ -969,6 +1006,7 @@ canvas{display:block;width:100%;height:100%}
 #nb .nb-min{background:none;border:1px solid #3A3E48;color:#8B8F98;font-size:14px;line-height:1;width:22px;height:18px;cursor:pointer;border-radius:2px;display:flex;align-items:center;justify-content:center;padding:0}
 #nb .nb-min:hover{color:#FFF;border-color:#666}
 #nb .nb-body{padding:8px 14px 10px;overflow:auto;max-height:calc(100% - 28px)}
+#nb .nb-news{color:#CBB37A;border-bottom:1px dashed #3A3E48;padding-bottom:6px;margin-bottom:6px}
 #nb .eh{color:#555;font-size:9px;margin-top:6px}
 #nb.mini{min-width:0;min-height:0;padding:0;cursor:move;resize:none;overflow:visible}
 #nb.mini .nb-body{display:none}
@@ -2488,9 +2526,9 @@ async function loadTradingDay(startDate,direction){
     }
     try{
       const res=await fetch(`/api/data?date=${ds}`,{cache:"no-store"});const data=await res.json();
-      dayCache.set(ds,{candles:data.candles||[],trades:data.trades||[],notes:data.notes||"",noTrading:!!data.noTrading});
+      dayCache.set(ds,{candles:data.candles||[],trades:data.trades||[],notes:data.notes||"",news:data.news||"",noTrading:!!data.noTrading});
       if(data.candles&&data.candles.length)return ds; // found trading day
-    }catch(e){dayCache.set(ds,{candles:[],trades:[],notes:"",noTrading:true});}
+    }catch(e){dayCache.set(ds,{candles:[],trades:[],notes:"",news:"",noTrading:true});}
   }
   return null; // no trading day found within 7 days
 }
@@ -2548,12 +2586,14 @@ const nb=document.getElementById("nb");
 function uNotes(){
   const day=dayCache.get(dayList[focusIdx]);
   const notes=day?day.notes||"":"";
+  const news=day?day.news||"":"";   // 每日中文重點（高低檔觀察指標 NEWS TITLES(值)，唯讀自動帶出）
   nb.style.display="block";
   const curDate=dayList[focusIdx]||"";
   const hdr='<div class="nb-hdr"><span>'+curDate+' '+dowStr(curDate)+'</span><button class="nb-min" id="nbtn" title="最小化/展開">'+(notesMini?'&#9633;':'&#8212;')+'</button></div>';
+  const newsHtml=news.trim()?'<div class="nb-news">'+news.replace(/</g,"&lt;").replace(/\n/g,"<br>")+'</div>':'';
   if(notesMini){nb.className="mini";nb.innerHTML=hdr;}
   else{nb.className="";
-    if(notes.trim())nb.innerHTML=hdr+'<div class="nb-body">'+notes.replace(/</g,"&lt;").replace(/\n/g,"<br>")+'<div class="eh">雙擊編輯 ｜ 拖曳移動</div></div>';
+    if(notes.trim()||news.trim())nb.innerHTML=hdr+'<div class="nb-body">'+newsHtml+(notes.trim()?notes.replace(/</g,"&lt;").replace(/\n/g,"<br>"):'')+'<div class="eh">雙擊編輯 ｜ 拖曳移動</div></div>';
     else nb.innerHTML=hdr+'<div class="nb-body"><span style="color:#555;font-style:italic">雙擊新增市場概述</span></div>';
   }
   pNotes();
@@ -2799,8 +2839,8 @@ async function isFirstTradingDayOfWeek(ds){
     if(isoWeek(prev)!==wk||new Date(prev+"T12:00:00").getFullYear()!==yr)break;
     if(!dayCache.has(prev)){
       try{const res=await fetch(`/api/data?date=${prev}`);const data=await res.json();
-        dayCache.set(prev,{candles:data.candles||[],trades:data.trades||[],notes:data.notes||"",noTrading:!!data.noTrading});
-      }catch(e){dayCache.set(prev,{candles:[],trades:[],notes:"",noTrading:true});}
+        dayCache.set(prev,{candles:data.candles||[],trades:data.trades||[],notes:data.notes||"",news:data.news||"",noTrading:!!data.noTrading});
+      }catch(e){dayCache.set(prev,{candles:[],trades:[],notes:"",news:"",noTrading:true});}
     }
     const d=dayCache.get(prev);
     if(d&&d.candles&&d.candles.length)return false; // earlier trading day exists
@@ -3046,7 +3086,7 @@ document.getElementById("be").addEventListener("click",exportPNG);
 async function loadDay(ds){
   if(dayCache.has(ds))return;
   const res=await fetch(`/api/data?date=${ds}`,{cache:"no-store"});const data=await res.json();
-  dayCache.set(ds,{candles:data.candles||[],trades:data.trades||[],notes:data.notes||"",noTrading:!!data.noTrading});
+  dayCache.set(ds,{candles:data.candles||[],trades:data.trades||[],notes:data.notes||"",news:data.news||"",noTrading:!!data.noTrading});
 }
 
 // Fit view: focus day fills ~95% of chart width with ~10 bars buffer each side
@@ -3187,7 +3227,7 @@ async function refreshData(){
   for(const ds of dates){
     try{
       const res=await fetch(`/api/data?date=${ds}`,{cache:"no-store"});const d=await res.json();
-      fresh.set(ds,{candles:d.candles||[],trades:d.trades||[],notes:d.notes||"",noTrading:!!d.noTrading});
+      fresh.set(ds,{candles:d.candles||[],trades:d.trades||[],notes:d.notes||"",news:d.news||"",noTrading:!!d.noTrading});
     }catch(e){const old=dayCache.get(ds);if(old)fresh.set(ds,old);}
   }
   dayCache.clear();                       // drop stale off-screen days too
