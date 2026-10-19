@@ -65,8 +65,31 @@ _history_cache = {"mtime": None, "by_date": None}
 # 來源：高低檔觀察指標.xlsb → NEWS TITLES(值) 分頁，A欄=日期序號(1899-12-30 基準)、F欄=中文重點
 NEWS_XLSB = r"D:\fileserver\書業(新)\7.例行更新檔\5.高低檔觀察指標.xlsb"
 _news_cache = {"mtime": None, "by_date": {}}
+# 2026-10-19 起主來源改為 Drive 同步檔（NewsTitlesSync\news_titles_sync.py 每 15 分產出，
+# 已合併 NEWS TITLES、NEWS TITLES(值) 與 us-session-logic 寫進 Drive 收件夾的總結）；檔案不在才退回直讀 xlsb。
+NEWS_JSON = r"C:\DataCacheSync\高低檔觀察指標\news_daily.json"
+_news_json_cache = {"mtime": None, "by_date": {}}
 
 def _load_news_by_date():
+    """每日中文重點 {YYYY-MM-DD: text}：先讀 news_daily.json（Drive 同步檔），讀不到再直讀 xlsb。"""
+    try:
+        jm = _os.path.getmtime(NEWS_JSON)
+        if _news_json_cache["mtime"] != jm:
+            import json as _njson
+            with open(NEWS_JSON, "r", encoding="utf-8") as _nf:
+                _days = _njson.load(_nf).get("days", {})
+            _news_json_cache["by_date"] = {k: (v.get("zh") or v.get("en") or "").strip() for k, v in _days.items()
+                                           if (v.get("zh") or v.get("en"))}
+            _news_json_cache["mtime"] = jm
+            print(f"[news] loaded {len(_news_json_cache['by_date'])} daily summaries from news_daily.json")
+        if _news_json_cache["by_date"]:
+            return _news_json_cache["by_date"]
+    except Exception as e:
+        if not isinstance(e, OSError):
+            print(f"[news] json load failed, fallback to xlsb: {e}")
+    return _load_news_from_xlsb()
+
+def _load_news_from_xlsb():
     """讀 NEWS TITLES(值) 的每日中文重點，傳回 {YYYY-MM-DD: text}。
     mtime 不變直接用快取；pyxlsb 缺少或檔案不可讀時安靜回空 dict（儀表板照常跑）。"""
     try:
@@ -889,7 +912,8 @@ def api_version():
     except Exception as e:ledger={"error":f"{type(e).__name__}: {e}"}
     # trades 欄位是客戶端的「資料版本 token」（只比相等）：併入每日重點 xlsb 的 mtime，
     # 使用者更新 高低檔觀察指標 後 4 秒內開著的頁面會自動 refreshData（2026-10-19 加）。
-    return jsonify({"trades":_mt(TRADES_FILE)+_mt(NEWS_XLSB),"sync":sync,"candles":candles,"ledger":ledger})
+    # 同日再併入 Drive 同步檔 news_daily.json 的 mtime（Drive 收件夾來的總結也會觸發刷新）。
+    return jsonify({"trades":_mt(TRADES_FILE)+_mt(NEWS_XLSB)+_mt(NEWS_JSON),"sync":sync,"candles":candles,"ledger":ledger})
 
 @app.route("/")
 def index():return HTML
@@ -2622,6 +2646,66 @@ function pNotes(){
   } else {
     nb.style.width="";nb.style.height="";
   }
+  if(!st.manual)_autoPlaceNotes(di,r);   // 沒手動拖過 → 自動放到 K 線上方或下方空白處（2026-10-19 使用者指定）
+}
+// 預設位置不蓋線圖：從焦點日可見部分的中央往左右掃描候選位置，取小窗正下方 K 棒的最高／最低價，
+// 第一個「最高價上方」或「最低價下方」放得下的位置就用；都放不下取蓋到最少的位置。
+// 展開時寬度上限為圖寬 55%（太寬的窗找不到空隙）。使用者拖曳過（st.manual）就尊重手動位置。
+function _autoPlaceNotes(di,r){
+  const plotL=M.l,plotR=W-M.r,top0=M.t,bot0=M.t+cH,pad=8;
+  // 先移到圖區左緣再量尺寸：絕對定位的寬度受「left 右邊剩多少空間」限制，停在畫面外會量到最小寬
+  nb.style.left=plotL+"px";
+  if(!notesMini){
+    const cap=Math.round((plotR-plotL)*0.55);
+    if(nb.offsetWidth>cap)nb.style.width=cap+"px";
+  }
+  const w=nb.offsetWidth||200,h=nb.offsetHeight||40;
+  const{pn,px}=autoY();
+  function hiLo(left){   // 小窗正下方的 K 棒（可能跨日）
+    let hi=-1e9,lo=1e9;
+    dayList.forEach((date,dj)=>{
+      const d=dayCache.get(date),c=d&&d.candles;
+      if(!c||!c.length)return;
+      const g0=gi2x(left)-gi(dj,0),g1=gi2x(left+w)-gi(dj,0);
+      for(let i=Math.max(0,Math.floor(g0));i<=Math.min(c.length-1,Math.ceil(g1));i++){
+        if(c[i].h>hi)hi=c[i].h;
+        if(c[i].l<lo)lo=c[i].l;
+      }
+    });
+    return hi<lo?null:{yHi:yOf(hi,pn,px),yLo:yOf(lo,pn,px)};
+  }
+  // 以焦點日「畫面上看得到的部分」置中；焦點日不在畫面內就以圖區中央為準
+  let vs=Math.max(xOfGi(gi(di,0)),plotL),ve=Math.min(xOfGi(gi(di,BPD-1)),plotR);
+  if(ve-vs<w/2){vs=plotL;ve=plotR;}
+  const maxL=Math.max(plotL,plotR-w),clampL=x=>Math.max(plotL,Math.min(x,maxL));
+  const c0=clampL((vs+ve)/2-w/2),step=Math.max(24,w/4),cands=[c0];
+  for(let k=1;k*step<=plotR-plotL;k++){cands.push(clampL(c0-k*step));cands.push(clampL(c0+k*step));}
+  function hits(left,top){   // 這個位置會蓋到幾根 K 棒
+    let n=0;
+    dayList.forEach((date,dj)=>{
+      const d=dayCache.get(date),c=d&&d.candles;
+      if(!c||!c.length)return;
+      const g0=gi2x(left)-gi(dj,0),g1=gi2x(left+w)-gi(dj,0);
+      for(let i=Math.max(0,Math.floor(g0));i<=Math.min(c.length-1,Math.ceil(g1));i++){
+        if(yOf(c[i].l,pn,px)>top&&yOf(c[i].h,pn,px)<top+h)n++;
+      }
+    });
+    return n;
+  }
+  let best=null;
+  for(const left of cands){
+    const hl=hiLo(left);
+    if(!hl){best={left,top:top0+pad};break;}   // 下方沒有 K 棒
+    const above=hl.yHi-top0,below=bot0-hl.yLo;
+    if(above>=h+pad*2){best={left,top:hl.yHi-h-pad};break;}
+    if(below>=h+pad*2){best={left,top:hl.yLo+pad};break;}
+    for(const top of [top0+2,bot0-h-2]){   // 哪裡都放不下 → 貼上緣或下緣，取蓋到最少的
+      const n=hits(left,top);
+      if(!best||n<best.n)best={left,top,n};
+    }
+  }
+  nb.style.left=best.left+"px";
+  nb.style.top=Math.max(top0,Math.min(best.top,bot0-h))+"px";
 }
 // Capture user-resized dimensions
 let _nbResizeObs=null;
@@ -2726,6 +2810,7 @@ document.addEventListener("mousemove",e=>{
       st.x=Math.max(-2,Math.min(2,st.x));
     }
     st.y=Math.max(0,Math.min(.9,(e.clientY-r.top-nOff.y)/r.height));
+    st.manual=1;   // 手動拖過 → 之後不再自動避開 K 線
     pNotes();return;
   }
   if(xAxisDrag){
