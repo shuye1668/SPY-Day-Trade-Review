@@ -887,6 +887,52 @@ def ledger_currency():
     if not ds:return None
     return {"latest":max(ds),"rows":int(len(df))}
 
+# ── 當日行情統計（2026-10-20 使用者要求：儀表板下方加 漲跌幅%／漲跌／收盤價／YTD／距52週高點%）──
+# 日線來源：yfinance SPY 日線（auto_adjust=False＝實際收盤價，含 1993 起全部歷史），
+# 記憶體快取 1 小時；查不到的日子（例如當天盤中、yfinance 斷線）用 history_minute 的最後一根補。
+_daily_cache={"ts":0,"rows":None}
+def _load_daily_spy():
+    now=time.time()
+    if _daily_cache["rows"] is not None and now-_daily_cache["ts"]<3600:
+        return _daily_cache["rows"]
+    rows={}
+    try:
+        import yfinance as yf
+        h=yf.Ticker(TICKER.split()[0]).history(period="max",interval="1d",auto_adjust=False)
+        for idx,r in h.iterrows():
+            rows[idx.strftime("%Y-%m-%d")]={"c":float(r["Close"]),"h":float(r["High"])}
+    except Exception as e:
+        print(f"[daily] yfinance daily failed: {e}")
+        if _daily_cache["rows"] is not None:
+            _daily_cache["ts"]=now-3000   # 10 分鐘後再試
+            return _daily_cache["rows"]
+    _daily_cache.update(ts=now,rows=rows)
+    return rows
+
+def day_stats(ds):
+    daily=dict(_load_daily_spy())
+    if ds not in daily:
+        bars=fetch_intraday(TICKER,ds)
+        if bars:daily[ds]={"c":float(bars[-1]["c"]),"h":max(float(b["h"]) for b in bars)}
+    if ds not in daily:return None
+    dates=sorted(d for d in daily if d<=ds)
+    prev=dates[-2] if len(dates)>=2 else None
+    close=daily[ds]["c"]
+    out={"date":ds,"close":round(close,2)}
+    if prev:
+        pc=daily[prev]["c"]
+        out.update(prevDate=prev,prevClose=round(pc,2),chg=round(close-pc,2),chgPct=round((close/pc-1)*100,2))
+    ybase=[d for d in dates if d<ds[:4]+"-01-01"]
+    if ybase:
+        yc=daily[ybase[-1]]["c"]
+        out.update(ytdBase=round(yc,2),ytdPct=round((close/yc-1)*100,2))
+    # 52 週高點（2026-10-20 使用者指定）：當天往前 365 個日曆日內（含當天）的最高價
+    w52=(dt.datetime.strptime(ds,"%Y-%m-%d")-dt.timedelta(days=365)).strftime("%Y-%m-%d")
+    hi_d=max((d for d in dates if d>w52),key=lambda d:daily[d]["h"])
+    hi=daily[hi_d]["h"]
+    out.update(high=round(hi,2),highDate=hi_d,fromHighPct=round((close/hi-1)*100,2))
+    return out
+
 @app.route("/api/version")
 def api_version():
     """Return data-file mtimes so the client can auto-detect edits and reload.
@@ -959,7 +1005,11 @@ def api_data():
     except Exception as e:
         print(f"[api_data] read_and_pair_for_date error: {e}")
         t=[]
-    return jsonify({"date":ds,"candles":c,"trades":t,"notes":notes,"news":news,"noTrades":len(t)==0})
+    try:st=day_stats(ds)
+    except Exception as e:
+        print(f"[api_data] day_stats error: {e}")
+        st=None
+    return jsonify({"date":ds,"candles":c,"trades":t,"notes":notes,"news":news,"noTrades":len(t)==0,"stats":st})
 
 @app.route("/api/notes",methods=["POST"])
 def api_notes():
@@ -1026,6 +1076,10 @@ canvas{display:block;width:100%;height:100%}
 .tc2 .dr{color:#8B8F98;margin-bottom:3px}.tc2 .pv{font-weight:bold;font-size:14px}
 .tc2 .pv.w{color:#FFF}.tc2 .pv.l{color:#FF4444}.tc2 .dt{color:#888;font-size:10px;margin-top:2px}
 .tc2.hi{border-color:#FFD700!important;box-shadow:0 0 8px rgba(255,215,0,0.35)}
+.sc2{flex:0 0 auto;display:flex;gap:14px;align-items:flex-start;background:#0D0F13;border:1px solid #2A2E36;border-radius:4px;padding:6px 14px;margin-right:6px}
+.sc2 .sx{display:flex;flex-direction:column;justify-content:flex-start;align-items:center;text-align:center;min-width:64px;padding-top:4px}
+.sc2 .sl{color:#8B8F98;font-size:10px;margin-bottom:3px}.sc2 .sv{color:#FFF;font-weight:bold;font-size:15px}
+.sc2 .sv.up{color:#26A69A}.sc2 .sv.dn{color:#FF4444}.sc2 .ss{color:#666;font-size:9.5px;margin-top:2px}
 #nb{position:absolute;background:rgba(26,29,34,0.94);border:1px solid #3A3E48;border-radius:4px;padding:0;font-size:12px;color:#E0E0E0;line-height:1.7;min-width:180px;min-height:50px;cursor:move;z-index:20;white-space:pre-wrap;word-wrap:break-word;overflow:hidden;resize:both}
 #nb .nb-hdr{display:flex;align-items:center;justify-content:space-between;padding:4px 10px 2px;border-bottom:1px solid #2A2E35;cursor:move;user-select:none}
 #nb .nb-hdr span{color:#FF8C00;font-size:10px;font-weight:bold}
@@ -2552,7 +2606,7 @@ async function loadTradingDay(startDate,direction){
     }
     try{
       const res=await fetch(`/api/data?date=${ds}`,{cache:"no-store"});const data=await res.json();
-      dayCache.set(ds,{candles:data.candles||[],trades:data.trades||[],notes:data.notes||"",news:data.news||"",noTrading:!!data.noTrading});
+      dayCache.set(ds,{candles:data.candles||[],trades:data.trades||[],notes:data.notes||"",news:data.news||"",noTrading:!!data.noTrading,stats:data.stats||null});
       if(data.candles&&data.candles.length)return ds; // found trading day
     }catch(e){dayCache.set(ds,{candles:[],trades:[],notes:"",news:"",noTrading:true});}
   }
@@ -2748,6 +2802,7 @@ nb.addEventListener("dblclick",e=>{if(e.target.closest(".nb-min"))return;if(note
 function renderCards(){
   const bar=document.getElementById("tb2");bar.innerHTML="";
   const day=dayCache.get(dayList[focusIdx]);
+  if(day&&day.stats)bar.appendChild(statsCard(day.stats));
   if(!day||!day.trades)return;
   day.trades.forEach((t,i)=>{
     const d=document.createElement("div");d.className="tc2";d.id="tc"+i;
@@ -2766,6 +2821,22 @@ function renderCards(){
     d.addEventListener("mouseleave",()=>{hovHit=null;hlCard(-1);draw();});
     bar.appendChild(d);
   });
+}
+// 當日行情卡（2026-10-20）：收盤價／漲跌／漲跌幅／YTD／距52週高點；漲綠跌紅（與 K 線同色）
+function statsCard(s){
+  const d=document.createElement("div");d.className="sc2";
+  const sg=v=>v==null?"—":(v>0?"+":"")+v.toFixed(2);
+  const cl=v=>v==null?"":(v>0?"up":v<0?"dn":"");
+  const cell=(lab,val,cls,sub)=>`<div class="sx"><div class="sl">${lab}</div><div class="sv ${cls}">${val}</div>${sub?`<div class="ss">${sub}</div>`:""}</div>`;
+  const md=x=>x?x.slice(5).replace("-","/"):"";
+  d.innerHTML=
+    cell("收盤價",s.close.toFixed(2),"",s.prevClose!=null?`前收 ${s.prevClose.toFixed(2)}`:"")+
+    cell("漲跌",sg(s.chg),cl(s.chg),"")+
+    cell("漲跌幅",s.chgPct==null?"—":sg(s.chgPct)+"%",cl(s.chgPct),"")+
+    cell("YTD",s.ytdPct==null?"—":sg(s.ytdPct)+"%",cl(s.ytdPct),s.ytdBase!=null?`年初 ${s.ytdBase.toFixed(2)}`:"")+
+    cell("距52週高點",sg(s.fromHighPct)+"%",cl(s.fromHighPct),`${s.high.toFixed(2)} (${s.highDate.slice(2).replace(/-/g,"/")})`);
+  d.title=`SPY ${s.date}${s.prevDate?"  前一交易日 "+s.prevDate:""}`;
+  return d;
 }
 function hlCard(idx){document.querySelectorAll(".tc2").forEach((c,i)=>{c.classList.toggle("hi",i===idx);
 if(i===idx)c.scrollIntoView({behavior:"smooth",block:"nearest",inline:"nearest"});});}
@@ -2926,7 +2997,7 @@ async function isFirstTradingDayOfWeek(ds){
     if(isoWeek(prev)!==wk||new Date(prev+"T12:00:00").getFullYear()!==yr)break;
     if(!dayCache.has(prev)){
       try{const res=await fetch(`/api/data?date=${prev}`);const data=await res.json();
-        dayCache.set(prev,{candles:data.candles||[],trades:data.trades||[],notes:data.notes||"",news:data.news||"",noTrading:!!data.noTrading});
+        dayCache.set(prev,{candles:data.candles||[],trades:data.trades||[],notes:data.notes||"",news:data.news||"",noTrading:!!data.noTrading,stats:data.stats||null});
       }catch(e){dayCache.set(prev,{candles:[],trades:[],notes:"",news:"",noTrading:true});}
     }
     const d=dayCache.get(prev);
@@ -3173,7 +3244,7 @@ document.getElementById("be").addEventListener("click",exportPNG);
 async function loadDay(ds){
   if(dayCache.has(ds))return;
   const res=await fetch(`/api/data?date=${ds}`,{cache:"no-store"});const data=await res.json();
-  dayCache.set(ds,{candles:data.candles||[],trades:data.trades||[],notes:data.notes||"",news:data.news||"",noTrading:!!data.noTrading});
+  dayCache.set(ds,{candles:data.candles||[],trades:data.trades||[],notes:data.notes||"",news:data.news||"",noTrading:!!data.noTrading,stats:data.stats||null});
 }
 
 // Fit view: focus day fills ~95% of chart width with ~10 bars buffer each side
@@ -3314,7 +3385,7 @@ async function refreshData(){
   for(const ds of dates){
     try{
       const res=await fetch(`/api/data?date=${ds}`,{cache:"no-store"});const d=await res.json();
-      fresh.set(ds,{candles:d.candles||[],trades:d.trades||[],notes:d.notes||"",news:d.news||"",noTrading:!!d.noTrading});
+      fresh.set(ds,{candles:d.candles||[],trades:d.trades||[],notes:d.notes||"",news:d.news||"",noTrading:!!d.noTrading,stats:d.stats||null});
     }catch(e){const old=dayCache.get(ds);if(old)fresh.set(ds,old);}
   }
   dayCache.clear();                       // drop stale off-screen days too

@@ -151,6 +151,7 @@ try {
         }
     }
     $r1 = $rows[0]; $rN = $rows[-1]
+    $ws.Range("Z${r1}:AA${rN}").HorizontalAlignment = -4108   # 成交價／成交時間置中（2026-10-20 使用者要求）
 
     # ── 合計 / 核驗 ────────────────────────────────────────────────────
     $tot = $rN + 1; $chk = $rN + 2
@@ -170,6 +171,7 @@ try {
     if ($dayExits.Count -gt 0) {
         $daySum = $cur
         for ($k = 0; $k -lt 4; $k++) { & $copyFmt ($tpl.sum + $k) ($cur + $k) }
+        $ws.Cells($cur, 25).NumberFormat = $ws.Cells($cur + 1, 25).NumberFormat   # 買列也用千分位（2026.10.19 使用者範本）
         if (Contig $dayRows) {
             $a = $dayRows[0]; $b = $dayRows[-1]
             $buyF = "=SUMIF(W${a}:W${b},`"<0`")"; $sellF = "=SUMIF(W${a}:W${b},`">0`")"; $cntF = "=`"SPY `" & COUNT(Y${a}:Y${b}) * 100 & `"股`""
@@ -191,6 +193,7 @@ try {
     if ($closeRows.Count -gt 0) {
         $closeSum = $cur
         for ($k = 0; $k -lt 4; $k++) { & $copyFmt ($tpl.sum + $k) ($cur + $k) }
+        $ws.Cells($cur, 25).NumberFormat = $ws.Cells($cur + 1, 25).NumberFormat   # 買列也用千分位（2026.10.19 使用者範本）
         $ws.Cells($cur, 23).NumberFormat = '@'; $ws.Cells($cur, 23).Value2 = "$($spec.dot) 平倉"; $ws.Cells($cur, 24).Value2 = '買'
         $ws.Cells($cur, 25).Formula = '=+' + ($entryRows -join '+')
         $ws.Cells($cur + 1, 23).NumberFormat = '@'; $ws.Cells($cur + 1, 23).Value2 = "SPY $($closeRows.Count * 100)股"; $ws.Cells($cur + 1, 24).Value2 = '賣'
@@ -246,6 +249,14 @@ try {
     $bk = Join-Path $dir ('舊檔\' + [IO.Path]::GetFileNameWithoutExtension($leaf) + '_backup_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.xlsx')
     Copy-Item -LiteralPath $Target -Destination $bk
     Write-Output "備份：$bk"
+    # 存檔前把視窗捲到新區塊，使用者一打開就看到今天的帳（2026-10-20 使用者回報「打開還是舊畫面」）
+    try {
+        $ws.Activate()
+        $win = $wb.Windows.Item(1)
+        $win.ScrollColumn = [math]::Max(1, $ws.Range('Q1').Column)
+        $win.ScrollRow = [math]::Max(1, $hr - 3)
+        $ws.Range("W$hr").Select() | Out-Null
+    } catch { Write-Output "（捲動視窗失敗，不影響帳：$($_.Exception.Message)）" }
     $wb.Save()
     $wb.Close($false)
     Write-Output '✅ SAVED'
