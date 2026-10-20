@@ -24,7 +24,7 @@ from datetime import datetime
 import openpyxl
 
 from spy_daytrade_engine import (
-    parse_statement, group_sessions, process_session, FLAG,
+    parse_statement, group_sessions, process_all, FLAG,
 )
 
 # 路徑相對本腳本所在目錄 → 整個資料夾可原樣搬到任一機器/路徑而不必改碼（遷移用）。
@@ -430,11 +430,13 @@ def main():
     a = ap.parse_args()
     with open(a.csv_path, encoding="utf-8-sig") as fh:
         text = fh.read()
-    sessions = group_sessions(parse_statement(text))
+    fills = parse_statement(text)
+    sessions = group_sessions(fills)
+    # 整份一起處理：留倉在 session 間傳遞、從 trades_all 帶入未平留倉（2026-10-20）。
+    # 跨日平倉腿帶 needs_review → gate() 照舊擋下，writer 本身不寫特例日。
+    process_all(sessions, fills, text, a.trades)
     if a.date:
         sessions = [s for s in sessions if s.edt_date == a.date]
-    for s in sessions:
-        process_session(s)
     if a.commit:
         # 鎖在呼叫端取得，一處涵蓋備份與兩條寫入路徑，
         # commit()/commit_trades_only() 內部完全不必改動。

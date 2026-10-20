@@ -32,6 +32,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 FLAG = "⚠️需人工確認"
+TRADES_PATH_DEFAULT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trades_all.xlsx")
 TW = ZoneInfo("Asia/Taipei")        # 台北 = 券商 statement "CST" 實際時區 (UTC+8, 無 DST)
 ET = ZoneInfo("America/New_York")   # EDT/EST，trades_all 用的時間
 
@@ -112,6 +113,7 @@ class Trade:
     net_cash: float     # sum(amount)+sum(misc_fee)
     misc_fee: float
     refs: list = field(default_factory=list)
+    cst_dt: datetime = None   # 最早成交的台北時間（對 Trade History 用）
     # 配對後填入
     type_tag: str = ""     # 多 / 空 / 平 / ''(進場)
     action: str = ""       # B / S
@@ -131,6 +133,7 @@ class Session:
     fills: list = field(default_factory=list)
     trades: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
+    notes: list = field(default_factory=list)   # ℹ️ 資訊（不擋寫入）：舊留倉續抱、跨區塊 BAL 落差
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -307,7 +310,7 @@ def merge_fills(session):
             edt_date=fs[0].edt_dt.strftime("%Y-%m-%d"),
             edt_time=fs[0].edt_dt.strftime("%H:%M:%S"),
             symbol=fs[0].symbol, side=side, qty=abs_qty, price=avg_px,
-            net_cash=net, misc_fee=fee, refs=[key],
+            net_cash=net, misc_fee=fee, refs=[key], cst_dt=fs[0].cst_dt,
         )
         if abs_qty not in (100,):
             # 非 100 股（奇數量/留倉零股）→ 標記人工確認，不靜默
@@ -323,12 +326,21 @@ def merge_fills(session):
 # 依時間 LIFO 配對（複刻 trade_review_app._analyse_all_trades 的當日 LIFO）
 # ─────────────────────────────────────────────────────────────────────────────
 
-def pair_intraday(session):
+def pair_intraday(session, carry=None):
     """對單一 session 的 trades 做 LIFO 配對，填 type_tag/action/pnl/pair_*。
     純當日進出：BOT→SOLD 平 = 多；SOLD→BOT 平 = 空。
     收盤仍有存貨 → 留倉（Status 1）並標記 needs_review（§0：留倉致 offset 跳動需人工確認）。
+
+    carry（2026-10-20 加）：前幾個交易日帶進來的未平多單留倉 lots（同一份 CSV 的前一 session，
+    或 trades_all 裡 Status='1' 的列）。以前每個 session 各自配對，平前日留倉的賣單會被誤判成
+    「新開空單留倉」、無損益。
+    規則（對齊人工帳 4/14、6/15、9/29、10/01、10/02 的配法）：
+      1. 先照舊做當日 LIFO 配對，carry 不參與——當沖腿的結果與舊版完全相同；
+      2. 收盤後仍未配到的 SOLD 腿（依時間序）才去平 carry，每筆取最晚建立的留倉（LIFO）
+         → Type '平'、Status '2'、損益=平倉淨額+原留倉淨額，原留倉 Trade 改 Status '2' 並回指。
+    回傳收盤後仍未平的 lots（今日新留倉 + 舊留倉續抱），給下一個 session 當 carry。
     """
-    stack = []  # 開倉 lots: {trade, qty_rem}
+    stack = []  # 開倉 lots: {trade, qty_rem, source, sess}
     for t in session.trades:
         signed = t.qty if t.side == "BOT" else -t.qty
         net_sign = 0
@@ -341,7 +353,7 @@ def pair_intraday(session):
             t.action = "B" if t.side == "BOT" else "S"
             t.type_tag = ""
             t.status = "0"
-            stack.append({"trade": t, "qty_rem": t.qty})
+            stack.append({"trade": t, "qty_rem": t.qty, "source": "csv", "sess": id(session)})
         else:
             # 平倉（縮小部位），LIFO 消耗 stack
             need = t.qty
@@ -369,6 +381,39 @@ def pair_intraday(session):
             t.pair_time = entry.edt_time
             t.pair_date = entry.edt_date
 
+    # 收盤仍未配到的 SOLD 腿 → 平前日多單留倉（carry 取最晚建立者，LIFO）
+    held = [l for l in (carry or []) if l["trade"].side == "BOT"]
+    for lot in [l for l in stack if l["trade"].side == "SOLD" and l["qty_rem"] == l["trade"].qty]:
+        if not held:
+            break
+        en_lot = held.pop()
+        t, en = lot["trade"], en_lot["trade"]
+        if t.qty != en.qty:
+            held.append(en_lot)
+            break
+        stack.remove(lot)
+        t.type_tag = "平"
+        t.status = "2"
+        t.pair_date, t.pair_time = en.edt_date, en.edt_time
+        en.status = "2"
+        en.pair_date, en.pair_time = t.edt_date, t.edt_time
+        t.needs_review = True
+        if en.net_cash is None:
+            t.pnl = None
+            t.review_reason = "跨日平倉，但原留倉淨額無法精確取得 — 需人工確認"
+        else:
+            t.pnl = round(t.net_cash + en.net_cash, 2)
+            t.review_reason = f"跨日平倉（Status=2）— 平 {en.edt_date} {en.edt_time} 留倉 @{en.price}"
+        src = "（trades_all 原留倉列需改 Status '2' 並補 Pair）" if en_lot.get("source") == "trades_all" else ""
+        session.warnings.append(
+            f"跨日平倉：{t.edt_time} {t.side} {t.qty}股 @{t.price} 平 {en.edt_date} {en.edt_time} "
+            f"留倉 @{en.price}，損益 {'?' if t.pnl is None else f'{t.pnl:.2f}'}{src}")
+
+    for lot in held:
+        tr = lot["trade"]
+        session.notes.append(
+            f"舊留倉續抱：{tr.edt_date} {tr.edt_time} {tr.side} {lot['qty_rem']}股 @{tr.price}")
+
     # 收盤仍有未平部位 → 留倉
     for lot in stack:
         lot["trade"].status = "1"
@@ -376,6 +421,7 @@ def pair_intraday(session):
         lot["trade"].review_reason = "收盤留倉（Status=1）— §0 留倉致 offset 跳動需人工確認"
         session.warnings.append(
             f"留倉：{lot['trade'].edt_time} {lot['trade'].side} {lot['qty_rem']}股 @{lot['trade'].price}")
+    return held + stack
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -404,12 +450,13 @@ def cross_check_balance(session):
 # 主流程（單一 session）
 # ─────────────────────────────────────────────────────────────────────────────
 
-def process_session(session):
+def process_session(session, carry=None):
+    """carry：前日帶進來的未平 lots。回傳 stats；stats['carry'] = 收盤後仍未平的 lots。"""
     merge_fills(session)
     # 交叉驗證 BALANCE（最重要的資料完整性閘門）
     bal_errs = cross_check_balance(session)
     session.warnings.extend(bal_errs)
-    pair_intraday(session)
+    left = pair_intraday(session, carry)
 
     # 自洽核驗：Σcol1 == close_bal - open_bal（CLAUDE §四.3）
     col1_sum = round(sum(t.net_cash for t in session.trades), 2)
@@ -418,13 +465,170 @@ def process_session(session):
         if abs(col1_sum - cash_change) > 0.01:
             session.warnings.append(
                 f"{FLAG}：Σcol1({col1_sum}) ≠ 收-開({cash_change})，差 {col1_sum-cash_change:+.2f}")
-    # 全平時 Σcol1 == Σpnl（CLAUDE §四.1）
     pnl_sum = round(sum(t.pnl for t in session.trades if t.pnl is not None), 2)
     has_hold = any(t.status == "1" for t in session.trades)
-    if not has_hold and abs(col1_sum - pnl_sum) > 0.01:
+    has_close = any(t.type_tag == "平" for t in session.trades)
+    # 全平時 Σcol1 == Σpnl（CLAUDE §四.1）；有留倉/跨日平倉時改驗「當沖腿」
+    # Σcol1(當沖) == Σpnl(當沖)——扣掉留倉建立腿與跨日平倉腿後仍須自洽。
+    dt = [t for t in session.trades if t.status == "0" and t.type_tag != "平"
+          and not any(t is lot["trade"] for lot in left)]
+    dt_col1 = round(sum(t.net_cash for t in dt), 2)
+    dt_pnl = round(sum(t.pnl for t in dt if t.pnl is not None), 2)
+    if not has_hold and not has_close:
+        if abs(col1_sum - pnl_sum) > 0.01:
+            session.warnings.append(
+                f"{FLAG}：全平但 Σcol1({col1_sum}) ≠ Σpnl({pnl_sum})")
+    elif abs(dt_col1 - dt_pnl) > 0.01:
         session.warnings.append(
-            f"{FLAG}：全平但 Σcol1({col1_sum}) ≠ Σpnl({pnl_sum})")
-    return {"col1_sum": col1_sum, "pnl_sum": pnl_sum, "has_hold": has_hold}
+            f"{FLAG}：扣除留倉/跨日平倉腿後 Σcol1當沖({dt_col1}) ≠ Σpnl當沖({dt_pnl})")
+    close_pnl = round(sum(t.pnl for t in session.trades
+                          if t.type_tag == "平" and t.pnl is not None), 2)
+    return {"col1_sum": col1_sum, "pnl_sum": pnl_sum, "has_hold": has_hold,
+            "daytrade_pnl": dt_pnl, "close_pnl": close_pnl, "carry": left}
+
+
+def load_open_lots(trades_path, before_date):
+    """trades_all 裡 Status='1'（仍留倉）且日期早於本份 CSV 第一個 session 的列 → carry lots。
+
+    淨額反推：買進腿對帳單 Misc Fees 恆為 0（SEC/TAF 只收賣方），故 BOT 淨額 = −價×股，
+    價格存 4 位小數 → 精確到分，非估算。空單留倉（SOLD）的賣方費用無法從 trades_all 精確反推
+    → net_cash=None，平倉時會標 needs_review、不算損益。
+    """
+    if not trades_path or not os.path.exists(trades_path):
+        return []
+    try:
+        import openpyxl
+    except ImportError:
+        return []
+    wb = openpyxl.load_workbook(trades_path, read_only=True, data_only=True)
+    ws = wb.active
+    lots = []
+    for r in ws.iter_rows(min_row=2, values_only=True):
+        if not r or r[0] in (None, ""):
+            continue
+        date = r[0].strftime("%Y-%m-%d") if isinstance(r[0], datetime) else str(r[0]).strip()[:10]
+        status = str(r[8]).strip() if len(r) > 8 and r[8] is not None else ""
+        if status.endswith(".0"):
+            status = status[:-2]
+        if status != "1" or date >= before_date:
+            continue
+        price = float(r[3]); qty = int(float(r[6])); act = str(r[7]).strip()
+        side = "BOT" if act == "B" else "SOLD"
+        net = round(-price * qty, 2) if side == "BOT" else None
+        t = Trade(edt_date=date, edt_time=str(r[1]).strip(), symbol=str(r[2]).strip(),
+                  side=side, qty=qty, price=price, net_cash=net, misc_fee=0.0,
+                  action=act, status="1")
+        lots.append({"trade": t, "qty_rem": qty, "source": "trades_all"})
+    wb.close()
+    lots.sort(key=lambda l: (l["trade"].edt_date, l["trade"].edt_time))
+    return lots
+
+
+_TOTAL_CASH_RE = re.compile(r'Total Cash\s*\$?\(?([\d,]+\.\d{2})\)?')
+
+
+def parse_total_cash(text):
+    """對帳單 Cash Balance 表後的 'Total Cash $2,383,728.23'（真實現金，不受 BAL 重編影響）。"""
+    m = _TOTAL_CASH_RE.search(text or "")
+    if not m:
+        return None
+    v = float(m.group(1).replace(",", ""))
+    return -v if "(" in m.group(0) else v
+
+
+def parse_trade_history(text):
+    """'Account Trade History' 表 → [(cst_dt, side, qty, pos_effect, price)]。表不存在回 []。"""
+    out = []
+    lines = (text or "").splitlines()
+    i = next((k for k, ln in enumerate(lines) if ln.strip() == "Account Trade History"), None)
+    if i is None:
+        return out
+    for ln in lines[i + 2:]:
+        if not ln.strip():
+            break
+        c = next(csv.reader(io.StringIO(ln)))
+        if len(c) < 11:
+            continue
+        try:
+            d, tm = c[1].strip().split()
+            out.append((_parse_cst_dt(d, tm), c[3].strip(), int(c[4]), c[5].strip(), float(c[10])))
+        except Exception:
+            continue
+    return out
+
+
+def check_pos_effect(sessions, history):
+    """跨日平倉腿必須在 Trade History 是 'TO CLOSE'。若是 'TO OPEN' → 引擎配錯（其實是新開倉）→ ⚠️。
+    Trade History 的時間偶爾比 Cash Balance 早 1 秒（10/19 23:18:32 vs :33），比對容許 ±10 秒、同價同方向。"""
+    for s in sessions:
+        for t in s.trades:
+            if t.type_tag != "平" or t.cst_dt is None:
+                continue
+            want = "SELL" if t.side == "SOLD" else "BUY"
+            hits = [h for h in history if h[1] == want and abs(h[4] - t.price) < 0.00005
+                    and abs((h[0] - t.cst_dt).total_seconds()) <= 10]
+            if not history:
+                continue
+            if not hits:
+                s.notes.append(f"{t.edt_time} 跨日平倉在 Trade History 找不到對應列（未能交叉確認 Pos Effect）")
+            elif any(h[3] != "TO CLOSE" for h in hits):
+                t.needs_review = True
+                t.review_reason = "Trade History 顯示 TO OPEN，與跨日平倉配對矛盾"
+                s.warnings.append(f"{FLAG}：{t.edt_time} {t.side} 引擎判跨日平倉，但 Trade History 為 "
+                                  f"{'/'.join(h[3] for h in hits)}")
+            else:
+                s.notes.append(f"{t.edt_time} 跨日平倉 ↔ Trade History TO CLOSE ✓")
+
+
+def process_all(sessions, fills=None, text=None, trades_path=None):
+    """依序處理整份 CSV 的所有 session，留倉 lots 在 session 間傳遞（跨日平倉配對）。
+
+    另做兩件跨 session 的檢查：
+      • 相鄰 session 的「前收盤 → 今開盤」BAL 落差 → ℹ️ 註記（券商 BAL 追溯重編，比照
+        offset_state.json 10/16 註記不認列損益）；
+      • 若對帳單有 Total Cash：第一個 BAL + 全部非 BAL 列淨額 應 == Total Cash
+        （相符即證明 BAL 落差只是券商重編、現金流完整）；不符只記 ℹ️，不擋。
+    回傳 [stats,...]（與 sessions 同序）。
+    """
+    first = sessions[0].edt_date if sessions else "9999-99-99"
+    carry = load_open_lots(trades_path, first) if trades_path else []
+    for lot in carry:
+        sessions and sessions[0].notes.append(
+            f"自 trades_all 帶入留倉：{lot['trade'].edt_date} {lot['trade'].edt_time} "
+            f"{lot['trade'].side} {lot['qty_rem']}股 @{lot['trade'].price}")
+    out = []
+    prev = None
+    for s in sessions:
+        if prev is not None and prev.close_bal is not None and s.open_bal is not None:
+            gap = round(s.open_bal - prev.close_bal, 2)
+            if abs(gap) > 0.01:
+                s.notes.append(
+                    f"跨區塊 BAL 落差 {gap:+,.2f}（前收 {prev.close_bal:,.2f} → 今開 "
+                    f"{s.open_bal:,.2f}）— 券商 BAL 重編，不認列損益")
+        st = process_session(s, carry)
+        # 只把多單留倉帶到下一個 session。本帳戶長期持有 SPY 核心多單，SOLD 永遠是 TO CLOSE；
+        # 當日配不到的 SOLD 是在平 CSV 範圍外的舊部位（如 8/03 平 7/16），不是開空單，
+        # 若帶下去會把隔天的買進誤配成「回補空單」。它在自己的 session 已標 ⚠️留倉。
+        carry = [l for l in st["carry"] if l["trade"].side == "BOT"]
+        out.append(st)
+        prev = s
+    if text:
+        check_pos_effect(sessions, parse_trade_history(text))
+    total_cash = parse_total_cash(text) if text else None
+    if total_cash is not None and fills:
+        bals = [f for f in fills if f.typ == "BAL" and f.balance is not None]
+        if bals and sessions:
+            chain = round(bals[0].balance + sum(f.net_cash for f in fills if f.typ != "BAL"), 2)
+            if abs(chain - total_cash) > 0.01:
+                # 只當註記不擋：券商 Total Cash 本身也會被重編（2026-08-11 檔差 +10.24，
+                # 當天帳照常寫入無誤）。真正的閘門仍是逐列 BALANCE 重建。
+                sessions[-1].notes.append(
+                    f"首 BAL+全部現金異動={chain:,.2f} ≠ Total Cash {total_cash:,.2f}"
+                    f"（差 {chain-total_cash:+,.2f}）— 券商數字自相矛盾，僅供參考")
+            else:
+                sessions[-1].notes.append(
+                    f"Total Cash {total_cash:,.2f} = 首 BAL+全部現金異動 ✓（現金流完整）")
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -445,7 +649,13 @@ def report_session(session, stats):
               f"{('' if t.pnl is None else f'{t.pnl:.2f}'):>9} "
               f"{t.pair_time}{flag}{(' '+t.review_reason) if t.needs_review else ''}")
     print(f" ── Σcol1={stats['col1_sum']:.2f}  Σpnl={stats['pnl_sum']:.2f}  "
-          f"留倉={stats['has_hold']}")
+          f"留倉={stats['has_hold']}"
+          + (f"  當沖Σpnl={stats['daytrade_pnl']:.2f}  平倉Σpnl={stats['close_pnl']:.2f}"
+             if stats.get("close_pnl") else ""))
+    if session.notes:
+        print(" 註記（不擋寫入）：")
+        for n in session.notes:
+            print(f"   ℹ️ {n}")
     if session.warnings:
         print(" 警告/需人工確認：")
         for w in session.warnings:
@@ -461,19 +671,26 @@ def main():
     ap.add_argument("csv_path", help="對帳單 CSV/文字檔路徑")
     ap.add_argument("--date", help="只處理指定 EDT 交易日 YYYY-MM-DD")
     ap.add_argument("--commit", action="store_true", help="實際寫入 live 檔（預設 dry-run）")
+    ap.add_argument("--trades", default=TRADES_PATH_DEFAULT,
+                    help="讀取未平留倉用的 trades_all.xlsx（預設本資料夾）")
+    ap.add_argument("--no-carry", action="store_true",
+                    help="不從 trades_all 帶入留倉（同份 CSV 內仍會跨 session 配對）")
     args = ap.parse_args()
 
     with open(args.csv_path, encoding="utf-8-sig") as fh:
         text = fh.read()
     fills = parse_statement(text)
     sessions = group_sessions(fills)
+    # 先整份處理（留倉要在 session 間傳遞），--date 只過濾輸出
+    stats_all = process_all(sessions, fills, text,
+                            None if args.no_carry else args.trades)
+    pairs = list(zip(sessions, stats_all))
     if args.date:
-        sessions = [s for s in sessions if s.edt_date == args.date]
-        if not sessions:
+        pairs = [(s, st) for s, st in pairs if s.edt_date == args.date]
+        if not pairs:
             print(f"找不到 {args.date} 的 session"); sys.exit(1)
 
-    for s in sessions:
-        stats = process_session(s)
+    for s, stats in pairs:
         report_session(s, stats)
 
     if args.commit:
