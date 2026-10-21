@@ -30,7 +30,7 @@ DIVIDENDS_FILE=_os.path.join(ROOT_FOLDER,"dividends.xlsx")
 TICKER="SPY US Equity"
 PORT=5500
 
-import datetime as dt,json,os,glob,warnings,sys,logging,time
+import datetime as dt,json,os,glob,warnings,sys,logging,time,math
 warnings.filterwarnings("ignore")
 import pandas as pd,numpy as np
 from flask import Flask,jsonify,request
@@ -900,7 +900,11 @@ def _load_daily_spy():
         import yfinance as yf
         h=yf.Ticker(TICKER.split()[0]).history(period="max",interval="1d",auto_adjust=False)
         for idx,r in h.iterrows():
-            rows[idx.strftime("%Y-%m-%d")]={"c":float(r["Close"]),"h":float(r["High"])}
+            c,hh=float(r["Close"]),float(r["High"])
+            # yfinance 偶爾回傳 Close/High=NaN 的列（2026-10-21：當日未收盤列），
+            # NaN 進 jsonify 會變成非法 JSON → 前端「Unexpected token 'N'」整頁載入失敗。
+            if not (math.isfinite(c) and math.isfinite(hh)):continue
+            rows[idx.strftime("%Y-%m-%d")]={"c":c,"h":hh}
     except Exception as e:
         print(f"[daily] yfinance daily failed: {e}")
         if _daily_cache["rows"] is not None:
