@@ -6,7 +6,7 @@ description: 美股交易日的台灣早上 06:00 TOS 採集；有新成交才�
 # 每日 TOS 採集 routine（Boss PC，權威版）
 
 > 本檔是自足的 —— 執行時**不需要**再去讀別的規則檔。
-> 最後更新：2026-10-16。
+> 最後更新：2026-10-21（採集隱形化：步驟 1.5／2／10／失敗處理）。
 >
 > ⚠️ **規則只能有一份。** 2026-08-11 查出的事故：這個排程原本內嵌 2026-07-17 的
 > OCR-only 流程，同時 `C:\TradeReview_Boss\CLAUDE.md` 另有一份較新的規則，兩者
@@ -114,7 +114,11 @@ $py = "C:\Users\TS USER\AppData\Local\Programs\Python\Python313\python.exe"
 - 手動補跑（例如週一開機補週五）時不受此限：直接從步驟 1 開始。
 
 **沒有新成交時「回復原樣」**：步驟 8 判定 `NEW_TRADES=0` → 不建草稿、不寄信，
-照樣做步驟 10 把 TOS 切回 Charts（採集前的看盤狀態），寫 log 後結束。
+照樣做 9.5（push）→ 11（log）→ 12（回報）→ 步驟 10（TOS 切回原頁籤＋還原使用者原本畫面）後結束。
+
+**採集隱形化（2026-10-20 起）**：使用者要求「採集完回到原本的螢幕畫面，看不出來有截圖，不影響使用」。
+所以：步驟 1.5 先等使用者閒置再記住畫面，步驟 10 一定是**整個 routine 的最後一個動作**（還原畫面），
+之後不再做任何會把 TOS／Claude 叫到前面的事。
 
 ---
 
@@ -139,6 +143,31 @@ Today: 2026-XX-XX
 
 ---
 
+## 【步驟 1.5】等使用者閒置 → 記住原本畫面（2026-10-20 新增）
+
+**一定要在步驟 2 叫出 TOS 之前做**，存到的才是使用者原本的畫面。
+
+```powershell
+# 這個 call 的 timeout 設 600000
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+. C:\TradeReview\boss_screen_state.ps1
+$today = (Get-Date).ToString("yyyy-MM-dd")
+$ss = "C:\TradeReview_Boss\logs\screen_state_$today.json"
+$idle = Wait-UserIdle -MinIdleSec 120 -MaxWaitMin 9
+Write-Host "idle: $idle"
+if (-not (Test-Path $ss)) { Save-ScreenState -Path $ss | Out-Null }   # 補跑/重跑時不覆蓋第一次記下的原始畫面
+```
+
+- `Wait-UserIdle`：使用者 2 分鐘內有動鍵盤/滑鼠就先等（每 15 秒看一次），回 `$true`＝可開工。
+- 回 `$false`（使用者一直在用）→ 同一段再呼叫最多 2 次（共約 27 分鐘）；仍在用就照跑，
+  log 註記 `user active, ran anyway`。
+- `Save-ScreenState` 記下：前景視窗、所有視窗 Z 順序、TOS 視窗大小/位置/最小化狀態、游標位置。
+- 模組 `C:\TradeReview\boss_screen_state.ps1` 由 502 端維護、經 git 送達；只做視窗管理
+  （不點擊、不打字、不關視窗），失敗不 throw。檔案不存在 → 先跑 `sync_pull.ps1 -Owner boss`，
+  仍沒有就略過 1.5／10.5，log 註記 `screen_state module missing`，其餘流程照常。
+
+---
+
 ## 【步驟 2】啟用 TOS 視窗
 
 ```powershell
@@ -152,6 +181,18 @@ if ($ok) { Capture-Screen "C:\TradeReview_Boss\logs\dbg_tos_activated_$today.png
 - `$ok = False` → 存 `logs\debug_no_tos_$today.png`，建 FAILED 草稿
   「TOS window not found」後結束。
 - `$ok = True` → view 該 PNG，確認 TOS 在前景且最大化、顯示交易介面（不是登入頁）。
+- **同時判斷主頁籤原本停在哪**（Monitor／Trade／Analyze／Scan／MarketWatch／Charts／…；
+  若是 Monitor，也記下子頁籤與它在截圖上的座標），記進畫面狀態檔，步驟 10 要切回去：
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+. C:\TradeReview\boss_screen_state.ps1
+$today = (Get-Date).ToString("yyyy-MM-dd")
+Set-SavedTosTab -Path "C:\TradeReview_Boss\logs\screen_state_$today.json" -Tab Charts   # 換成實際看到的頁籤
+```
+
+  非 Charts／Monitor 的頁籤，把它在本截圖上的 x 座標一起寫進 log（步驟 10 點回去要用）。
+  補跑/重跑時狀態檔已有頁籤就不要覆蓋（那時 TOS 可能已被前一次切過）。
 
 ---
 
@@ -162,7 +203,7 @@ if ($ok) { Capture-Screen "C:\TradeReview_Boss\logs\dbg_tos_activated_$today.png
 - **情境 1**：已在 Monitor → Account Statement → 跳到步驟 4
 - **情境 2**：在 Monitor 但不是 Account Statement 子頁籤
   → 從截圖找到該子頁籤座標 → `Click-At <x> <y>` → 等 1 秒截圖確認
-- **情境 3**：在其他主頁籤（上次收尾會停在 Charts，這是正常起點）
+- **情境 3**：在其他主頁籤（收尾會切回使用者原本的頁籤，常見是 Charts，這是正常起點）
   → 同一個 call：`Activate-TOSWindowVerified` → `Click-At 262 33`（Monitor）→ 等 1 秒
   → `[Win32Api]::SetCursorPos(1000, 900)`（游標移開，主頁籤 hover 選單才會收起）→ 截圖
   → 通常會直接停在 Account Statement 子頁籤；若不是，再點子頁籤 `Click-At 455 55`（同樣先 Verified）
@@ -459,7 +500,7 @@ $env:PYTHONIOENCODING = "utf-8"
 & $py C:\TradeReview_Boss\check_new_trades.py "C:\TradeReview\_inbox\$today.csv"
 ```
 
-- 輸出 `NEW_TRADES=0` → **不建草稿、不寄信**，跳到步驟 9.5（git）／10／11，
+- 輸出 `NEW_TRADES=0` → **不建草稿、不寄信**，跳到步驟 9.5（git）→ 11 → 12 → 10，
   log 註記 `no new trades, no email`。
 - 輸出 `NEW_TRADES=N`（N≥1）→ 繼續 8.2 與步驟 9。
 - 已寄過的成交記在 `C:\TradeReview_Boss\logs\reported_trades.txt`（每筆一行），
@@ -558,21 +599,34 @@ push 失敗會自動重試 3 次；三次都失敗時本機 commit 仍在（**�
 
 ---
 
-## 【步驟 10】收尾：切回 Charts
+## 【步驟 10】收尾：切回原頁籤 ＋ 還原原本畫面（整個 routine 的最後一個動作）
 
-目的：採集完把 TOS 還原到看盤狀態，開盤時直接看到圖表。
+目的：採集完讓畫面回到使用者原本的樣子（TOS 原頁籤、視窗大小/最小化、前景視窗、游標），看不出來有採集過。
 
 ⚠️ **非致命**：失敗也不建 FAILED 草稿、不改主旨，只在 log 尾註記 + 存 debug 截圖。
-⚠️ 前提：步驟 8～9 已完成（信已寄出，或 NEW_TRADES=0 而略過）才做。若更早步驟就 FAILED 結束，保持畫面在失敗當下的
-狀態（方便人工檢查），不切 Charts。
+⚠️ **順序**：9（寄信）→ 9.5（push）→ 11（log）→ 12（回報表格先在對話寫好）→ **10**。
+Gmail 工具不會搶前景，可以先做；10.5 之後什麼都不做。
+⚠️ 若更早步驟就 FAILED：照「失敗處理通則」先存 debug 截圖，再做本步驟（不讓使用者看到停在錯誤畫面的 TOS）。
 
-**10.1**（單一 call）：
+**10.1** 切回原頁籤（單一 call）：先讀 `Get-SavedTosTab`，空白就照舊切 Charts。
+
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 . C:\TradeReview_Boss\tos_automation.ps1
-Switch-ToCharts          # Verified 啟用 → Click-At 557 33（Charts）→ 游標移到 (960,400)
-Capture-Screen "C:\TradeReview_Boss\logs\dbg_charts_$today.png"
+. C:\TradeReview\boss_screen_state.ps1
+$today = (Get-Date).ToString("yyyy-MM-dd")
+$tab = Get-SavedTosTab -Path "C:\TradeReview_Boss\logs\screen_state_$today.json"
+Write-Host "saved tab: '$tab'"
+if (-not $tab -or $tab -eq 'Charts') {
+    Switch-ToCharts      # Verified 啟用 → Click-At 557 33（Charts）→ 游標移到 (960,400)
+} elseif ($tab -eq 'Monitor') {
+    if (Activate-TOSWindowVerified) { Click-At 262 33; Start-Sleep 1; [Win32Api]::SetCursorPos(1000, 900) | Out-Null }
+}
+# 其他頁籤：從步驟 2 的全螢幕截圖找座標，同樣「Activate-TOSWindowVerified → Click-At <x> 33 → SetCursorPos 移開」
+Capture-Screen "C:\TradeReview_Boss\logs\dbg_tab_$today.png"
 ```
+
+- 原頁籤是 Monitor 且子頁籤原本不是 Account Statement → 再點回原子頁籤（座標從步驟 2 截圖取，同樣先 Verified）。
 
 ⚠️ 主頁籤 hover 會彈出下拉小選單（Charts / Flexible Grid / Product Depth / Bookmap），
 游標停在頁籤上選單不會消失（ESC 也關不掉）→ `Switch-ToCharts` 會把游標移到 (960,400)。
@@ -581,15 +635,30 @@ Capture-Screen "C:\TradeReview_Boss\logs\dbg_charts_$today.png"
 主頁籤列 y≈33（2026-10-16 實測，build 1993）：Monitor=262、Charts=557。
 （2026-07-13 舊版 build 是 y≈52、Charts=336，已不適用。）
 
-**10.2** view 驗證：Charts 呈選中、畫面主體是圖表、下拉選單已消失、無彈出對話框。
+**10.2** view 驗證：原頁籤呈選中、下拉選單已消失、無彈出對話框。
 
-**10.3** 沒切成功：從全螢幕截圖重新定位 Charts 的 x 座標（不要另外 `Capture-Region`，
+**10.3** 沒切成功：從全螢幕截圖重新定位該頁籤的 x 座標（不要另外 `Capture-Region`，
 那樣拍到的常是搶到前景的 Claude 視窗）
 → 用新座標重點一次（點完一樣要 `SetCursorPos` 移開）→ 再截圖驗證。
-第二次仍失敗 → 放棄，log 註記「Charts switch FAILED (non-fatal)」，繼續步驟 11。
+第二次仍失敗 → 放棄，log 註記「tab restore FAILED (non-fatal)」，繼續 10.5。
 
-**10.4 安全限制**：只點 Charts 頁籤本身；進 Charts 頁後不點頁面內任何元件；
+**10.4 安全限制**：只點頁籤本身；進頁後不點頁面內任何元件；
 不點下拉選單裡的項目；不改 symbol／時間週期；不點任何下單相關按鈕。
+
+**10.5 還原畫面（最後一個動作）**：
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+. C:\TradeReview\boss_screen_state.ps1
+$today = (Get-Date).ToString("yyyy-MM-dd")
+Restore-ScreenState -Path "C:\TradeReview_Boss\logs\screen_state_$today.json"
+```
+
+- TOS 視窗原樣還原（原本最小化就縮回去）、Z 順序重排、原前景視窗搶回並驗證、游標歸位；
+  並在 5 秒與 15 秒後背景再補還原前景一次（防 Claude Desktop 事後跳回前面）。
+- 驗證只看輸出那一行：`foreground=True` 才算還原成功；`False` → 在對話回報註記 `screen restore partial`（非致命）。
+- **之後不要再接** `Capture-Screen`／`Activate-TOSWindowVerified` 或任何會把 TOS/Claude 叫到前面的動作——還原後就結束。
+  （10.5 結果不寫回 log：log 已在步驟 11 寫好，避免多一次動作。）
 
 ---
 
@@ -599,10 +668,12 @@ append 到 `C:\TradeReview_Boss\logs\daily_run.log`：
 
 ```
 成功（CSV）：
-[YYYY-MM-DD HH:MM:SS] OK (CSV) - N rows, local write OK, pushed <sha>, Charts restored
+[YYYY-MM-DD HH:MM:SS] OK (CSV) - N rows, local write OK, pushed <sha>, screen restore next
 
 成功（OCR 備援）：
-[YYYY-MM-DD HH:MM:SS] OK (OCR) - N TRD rows valid (max diff $X), local write OK, pushed <sha>, Charts restored
+[YYYY-MM-DD HH:MM:SS] OK (OCR) - N TRD rows valid (max diff $X), local write OK, pushed <sha>, screen restore next
+
+步驟 1.5 使用者一直在用：行尾加 `user active, ran anyway`
 
 每行都要註明寄信結果：`emailed N new trades to juliahsu13 (<message-id>)` ／
 `no new trades, no email` ／ `SEND FAILED: <原因>`
@@ -613,8 +684,7 @@ append 到 `C:\TradeReview_Boss\logs\daily_run.log`：
 push 失敗：
 [YYYY-MM-DD HH:MM:SS] PARTIAL - local write OK, PUSH FAILED after 3 retries
 
-Charts 收尾失敗但其餘成功：
-[YYYY-MM-DD HH:MM:SS] OK (...) - ..., Charts switch FAILED (non-fatal)
+（步驟 10 在 log 之後才做，結果只在步驟 12 回報；log 不另補。）
 
 失敗：
 [YYYY-MM-DD HH:MM:SS] FAIL - <step> - <reason>
@@ -637,7 +707,9 @@ Charts 收尾失敗但其餘成功：
 | Email | ✓ 已寄 juliahsu13@gmail.com（`<message-id>`）／ — 無新成交未寄 ／ ✗ 寄送失敗 |
 | Subject | `[SPY-DayTrade-Autosend] <date>` |
 | git push | ✓ `<sha>` ／ ✗ 三次重試均失敗 |
-| Charts 還原 | ✓（`logs/dbg_charts_<date>.png`）／ ✗ non-fatal |
+| 畫面還原 | 原頁籤 `<tab>`；`Restore-ScreenState` foreground=True ／ partial（non-fatal） |
+
+回報表格在步驟 10 **之前**寫好；步驟 10 跑完只補一句還原結果，不再做其他動作。
 
 ---
 
@@ -652,9 +724,12 @@ Charts 收尾失敗但其餘成功：
 4. 執行 `& $py write_sync_state.py --status failed --note "<reason>"`
    （讓 502 的 App 標頭轉紅；同樣**不要帶 `--date`**）
 5. 對話中回報具體失敗位置 + 建議下一步
+6. **最後**照步驟 10 切回原頁籤並 `Restore-ScreenState`（2026-10-20 起取代舊規則「保持畫面在失敗當下」：
+   人工檢查看第 1 點的 debug 截圖就好，不讓使用者看到停在錯誤畫面的 TOS）。
+   例外：TOS 跳出錯誤對話框（如 Unexpected error）時不要亂點，只做 10.5 `Restore-ScreenState`（對話框留著，log 註記）。
 
-**例外**：步驟 10（切回 Charts）是收尾動作，失敗為非致命 —— 不建 FAILED 草稿、
-不改主旨，只在 log 的 OK 行尾註記並存 debug 截圖。
+**例外**：步驟 10（切回原頁籤＋還原畫面）是收尾動作，失敗為非致命 —— 不建 FAILED 草稿、
+不改主旨，只在步驟 12 回報註記並存 debug 截圖。
 
 **不嘗試**：
 - tool_search 找 computer use（不會有）
@@ -669,7 +744,7 @@ Charts 收尾失敗但其餘成功：
 ### TOS 操作
 - ❌ 不點任何 **Buy / Sell / Place Order** 按鈕
 - ❌ 採集過程不切到 Account Statement 以外的頁面
-  （唯一例外：步驟 10 收尾切回 Charts，且只點頁籤本身）
+  （唯一例外：步驟 10 收尾切回使用者原本的頁籤／子頁籤，且只點頁籤本身）
 - ❌ 不重啟 TOS、不嘗試輸入密碼
 
 ### Gmail
@@ -706,6 +781,7 @@ Charts 收尾失敗但其餘成功：
 - `Activate-TOSWindowVerified`：啟用後確認前景真的是 TOS 才點（單純 `Activate-TOSWindow` 會被 Claude 搶回）
 - `Open-ExportDialog` + `Confirm-ExportSave` + `Move-Item` 改名：CSV 匯出整套
 - `Switch-ToCharts`：收尾切回 Charts
+- `boss_screen_state.ps1`（2026-10-20）：`Wait-UserIdle`／`Save-ScreenState`／`Restore-ScreenState`，採集完畫面原樣還原
 - 操作後 `Capture-Screen` + view，能精準判斷下一步座標
 
 **❌ 會踩的坑**
@@ -732,6 +808,7 @@ Charts 收尾失敗但其餘成功：
 
 | 日期 | 變更 |
 |---|---|
+| 2026-10-20 | **採集隱形化**：新增步驟 1.5（`Wait-UserIdle`＋`Save-ScreenState`）、步驟 2 記原頁籤、步驟 10 切回原頁籤＋`Restore-ScreenState`（TOS 視窗大小/最小化、Z 順序、前景、游標原樣還原，5/15 秒背景補還原）並移到最後（9→9.5→11→12→10）；失敗時也還原（debug 截圖照存）。模組 `C:\TradeReview\boss_screen_state.ps1` 由 502 端維護（2026-10-21 於 Boss PC 套用） |
 | 2026-10-16 | **推送改三樣**：9.5 只推 `_inbox\`／`verify_shots\`／`BOSS_SKILL_current.md`（trades_all／sync_state 歸 502、不推）；9.5 推送前自動複製 SKILL 到 `BOSS_SKILL_current.md`；檔頭寫明改 SKILL 後要同步 CLAUDE.md 與 BOSS_SKILL_current.md |
 | 2026-10-16 | **舊內容校正**：座標改為 build 1993 實測（主頁籤 y≈33、Monitor 262、Charts 557）；新增「Claude 搶前景」坑與 `Activate-TOSWindowVerified`；步驟 4 改為 N≥5 不動；步驟 5 改用 `Open-ExportDialog`／`Confirm-ExportSave`（鍵盤選單、不打檔名再改名）；步驟 9.5 推送清單加 `verify_shots\`、repo 卡 rebase 時不跑 push；步驟 10 改用 `Switch-ToCharts` |
 | 2026-10-16 | 新增 9.0b 驗證截圖本機留存：交易日擷取 Cash Balance＋Order History＋Trade History，存 `logs\` 與 `verify_shots\`；不附信件、不動日期範圍欄位、不放 `_inbox\` |
