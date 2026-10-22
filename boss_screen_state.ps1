@@ -19,6 +19,16 @@
 # 還原後另起一個隱藏的 PowerShell，在 5 秒與 15 秒後再各還原一次前景
 # （Claude Desktop 在工具呼叫結束後常會自己跳回前面）。
 #
+# 2026-10-22 加（使用者要求「不管有沒有完成都要把自己縮小，卡住也不要擋在螢幕上」）：
+#   - Restore-ScreenState 一律把 Claude Desktop 視窗最小化（不搶前景），5/15 秒補還原時再縮一次；
+#     畫面狀態檔不存在時也照縮。
+#   - 執行旗標 C:\TradeReview_Boss\logs\run_flag_<日期>.json：Wait-UserIdle 結束時記 started，
+#     Restore-ScreenState 記 finished。
+#   - 守門排程 Boss_Screen_Guard（Wait-UserIdle／Restore-ScreenState 第一次在 Boss PC 跑時自動註冊，
+#     只限本機使用者、互動式）：週二～週六 06:10～09:30 每 10 分鐘跑 boss_screen_guard.ps1——
+#     started 超過 30 分鐘還沒 finished（任務卡住）→ 還原畫面＋縮小 Claude；使用者 3 分鐘內有操作就不動。
+#   以上只在 Boss PC（有 C:\TradeReview_Boss）生效；Boss SKILL 文字不用改。
+#
 # 安全：只做視窗管理（不點擊、不打字、不關任何視窗）。所有函式失敗都不 throw，回傳狀態物件。
 
 if (-not ('BossWin' -as [type])) {
@@ -89,15 +99,87 @@ public static class BossWin {
 
 function Get-IdleSeconds { [math]::Round([BossWin]::IdleMs() / 1000.0, 1) }
 
+# ── 執行旗標／Claude 視窗／守門排程（2026-10-22）───────────────────────────
+if (-not $script:BossLogDir) { $script:BossLogDir = 'C:\TradeReview_Boss\logs' }
+$script:BossGuardTask = 'Boss_Screen_Guard'
+
+function Test-IsBossPC { Test-Path -LiteralPath (Split-Path -Parent $script:BossLogDir) }
+
+function Get-RunFlagPath { param([string]$Day = (Get-Date).ToString('yyyy-MM-dd')) Join-Path $script:BossLogDir "run_flag_$Day.json" }
+
+function Read-RunFlag {
+    param([string]$Day = (Get-Date).ToString('yyyy-MM-dd'))
+    $p = Get-RunFlagPath $Day
+    if (-not (Test-Path -LiteralPath $p)) { return $null }
+    try { return Get-Content -LiteralPath $p -Raw -Encoding UTF8 | ConvertFrom-Json } catch { return $null }
+}
+
+function Set-RunFlag {
+    # 把旗標的某個欄位（started / finished / guard_restored / guard_final）設成現在時間；不是 Boss PC 就不做
+    param([Parameter(Mandatory = $true)][string]$Field, [string]$Value = (Get-Date).ToString('s'))
+    if (-not (Test-IsBossPC)) { return }
+    try {
+        $f = Read-RunFlag
+        if (-not $f) { $f = [pscustomobject]@{} }
+        $f | Add-Member -NotePropertyName $Field -NotePropertyValue $Value -Force
+        New-Item -ItemType Directory -Force -Path $script:BossLogDir | Out-Null
+        $f | ConvertTo-Json | Set-Content -LiteralPath (Get-RunFlagPath) -Encoding UTF8
+    } catch {}
+}
+
+function Get-ClaudeWindows {
+    # Claude Desktop（程序名 claude）的可見頂層視窗
+    $ids = @(Get-Process -Name claude -ErrorAction SilentlyContinue | ForEach-Object { [uint32]$_.Id })
+    if (-not $ids.Count) { return @() }
+    $out = @()
+    foreach ($h in [BossWin]::TopLevel()) {
+        $wpid = [uint32]0; [void][BossWin]::GetWindowThreadProcessId($h, [ref]$wpid)
+        if ($ids -contains $wpid) { $out += $h }
+    }
+    return $out
+}
+
+function Minimize-ClaudeWindows {
+    # 最小化 Claude Desktop 視窗（SW_SHOWMINNOACTIVE：不把焦點交給別的視窗，前景由呼叫端還原）
+    param([switch]$WhatIf)
+    $wins = @(Get-ClaudeWindows)
+    $n = 0
+    foreach ($h in $wins) {
+        if (-not [BossWin]::IsIconic($h)) { if (-not $WhatIf) { [void][BossWin]::ShowWindow($h, 7) }; $n++ }
+    }
+    return "$n/$($wins.Count)"
+}
+
+function Install-BossScreenGuard {
+    # 在 Boss PC 註冊守門排程（已存在就不動）。本機目前使用者、互動式、一般權限。
+    param([string]$TaskName = $script:BossGuardTask, [string]$ScriptDir = 'C:\TradeReview', [switch]$Force)
+    if (-not $Force -and -not (Test-IsBossPC)) { return 'not boss pc' }
+    try {
+        if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) { return 'exists' }
+        $vbs = Join-Path $ScriptDir 'boss_run_hidden.vbs'
+        $guard = Join-Path $ScriptDir 'boss_screen_guard.ps1'
+        if (-not (Test-Path $vbs) -or -not (Test-Path $guard)) { return 'guard files missing' }
+        $act = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument ('//B //Nologo "{0}" "{1}"' -f $vbs, $guard)
+        $trg = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Tuesday, Wednesday, Thursday, Friday, Saturday -At '06:10'
+        $trg.Repetition = (New-ScheduledTaskTrigger -Once -At '06:10' -RepetitionInterval (New-TimeSpan -Minutes 10) -RepetitionDuration (New-TimeSpan -Hours 3 -Minutes 20)).Repetition
+        $pr = New-ScheduledTaskPrincipal -UserId ("{0}\{1}" -f $env:USERDOMAIN, $env:USERNAME) -LogonType Interactive -RunLevel Limited
+        $st = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 5) -MultipleInstances IgnoreNew
+        Register-ScheduledTask -TaskName $TaskName -Action $act -Trigger $trg -Principal $pr -Settings $st `
+            -Description 'Boss 採集卡住時還原畫面＋縮小 Claude（boss_screen_state.ps1 自動註冊，2026-10-22）' | Out-Null
+        return 'installed'
+    } catch { return "install failed: $($_.Exception.Message)" }
+}
+
 function Wait-UserIdle {
     # 使用者最近 MinIdleSec 秒內有動鍵盤/滑鼠 → 每 15 秒再看一次，最多等 MaxWaitMin 分鐘。
     # 回傳 $true=已閒置可開工；$false=等到上限仍在使用（由 SKILL 決定：照跑或延後）。
     param([int]$MinIdleSec = 120, [int]$MaxWaitMin = 30)
+    # 回傳前記執行旗標 started（守門排程用它判斷「跑太久＝卡住」），並確認守門排程已註冊
     $deadline = (Get-Date).AddMinutes($MaxWaitMin)
     while ($true) {
         $idle = Get-IdleSeconds
-        if ($idle -ge $MinIdleSec) { Write-Host "user idle ${idle}s → OK"; return $true }
-        if ((Get-Date) -ge $deadline) { Write-Host "user still active (idle ${idle}s) after $MaxWaitMin min"; return $false }
+        if ($idle -ge $MinIdleSec) { Write-Host "user idle ${idle}s → OK"; Set-RunFlag started; [void](Install-BossScreenGuard); return $true }
+        if ((Get-Date) -ge $deadline) { Write-Host "user still active (idle ${idle}s) after $MaxWaitMin min"; Set-RunFlag started; [void](Install-BossScreenGuard); return $false }
         Write-Host "user active (idle ${idle}s) → wait 15s"
         Start-Sleep -Seconds 15
     }
@@ -169,8 +251,14 @@ function Get-SavedTosTab {
 function Restore-ScreenState {
     # -NoReassert：不啟動延遲補還原的背景程序（背景程序本身呼叫時用）
     param([Parameter(Mandatory = $true)][string]$Path, [switch]$NoReassert, [switch]$ForegroundOnly)
-    $r = [ordered]@{ tos = 'skip'; zorder = 'skip'; foreground = $false; cursor = $false }
-    if (-not (Test-Path $Path)) { Write-Host "no state file: $Path"; return [pscustomobject]$r }
+    $r = [ordered]@{ tos = 'skip'; zorder = 'skip'; foreground = $false; cursor = $false; claude = 'skip' }
+    if (-not $ForegroundOnly) { Set-RunFlag finished; if (-not $NoReassert) { [void](Install-BossScreenGuard) } }
+    if (-not (Test-Path $Path)) {
+        # 沒記到原本畫面（例如步驟 1.5 前就失敗）：至少把 Claude 縮小，不擋在螢幕上
+        $r.claude = Minimize-ClaudeWindows
+        Write-Host "no state file: $Path → claude minimized $($r.claude)"
+        return [pscustomobject]$r
+    }
     $s = Get-Content -Path $Path -Raw -Encoding UTF8 | ConvertFrom-Json
 
     if (-not $ForegroundOnly) {
@@ -204,8 +292,14 @@ function Restore-ScreenState {
         $r.zorder = "$ok/$($list.Count)"
     }
 
+    # 2.5) Claude Desktop 一律縮小（使用者 2026-10-22 要求：不管有沒有完成都不要擋在螢幕上）。
+    #      原前景視窗若就是 Claude 本身，縮小後就不再搶回它。
+    $r.claude = Minimize-ClaudeWindows
+    $claudeHw = @(Get-ClaudeWindows | ForEach-Object { [int64]$_ })
+
     # 3) 前景視窗搶回並驗證（最多 6 次）
     $fg = [IntPtr][int64]$s.foreground.hwnd
+    if ($claudeHw -contains [int64]$fg) { $fg = [IntPtr]::Zero }
     if ([BossWin]::IsWindow($fg)) {
         for ($k = 0; $k -lt 6 -and -not $r.foreground; $k++) { $r.foreground = [BossWin]::ForceForeground($fg); if (-not $r.foreground) { Start-Sleep -Milliseconds 300 } }
     }
@@ -219,6 +313,6 @@ function Restore-ScreenState {
         Start-Process powershell.exe -WindowStyle Hidden -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $cmd) | Out-Null
     }
     $o = [pscustomobject]$r
-    Write-Host ("screen state restored: tos={0} zorder={1} foreground={2} ('{3}') cursor={4}" -f $o.tos, $o.zorder, $o.foreground, $s.foreground.title, $o.cursor)
+    Write-Host ("screen state restored: tos={0} zorder={1} foreground={2} ('{3}') cursor={4} claude_minimized={5}" -f $o.tos, $o.zorder, $o.foreground, $s.foreground.title, $o.cursor, $o.claude)
     return $o
 }
