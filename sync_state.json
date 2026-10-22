@@ -1,8 +1,8 @@
 {
-  "last_trade_date": "2026-10-19",
+  "last_trade_date": "2026-10-21",
   "status": "ok",
-  "note": "無新成交（10/21 匯出僅含已入帳的 10/16、10/19 session；10/20 美股盤無成交）",
-  "updated_utc": "2026-10-20T22:54:09Z",
+  "note": "10/21 手動補入（Cash Balance 漏列 22:16 SELL，依 Trade History＋Total Cash 補列）",
+  "updated_utc": "2026-10-22T00:56:06Z",
   "host": "SHUYE07",
-  "latest_in_trades_all": "2026-10-19"
+  "latest_in_trades_all": "2026-10-21"
 }
