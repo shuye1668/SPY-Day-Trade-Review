@@ -32,8 +32,10 @@ CLAUDE.md 仍是欄位/區塊結構的權威定義；本檔定義「怎麼跑」
    ```
    python spy_daytrade_writer.py <statement.csv> --date YYYY-MM-DD --commit
    ```
-   writer 內含 gate（有任何 needs_review/留倉/BALANCE 對不上 → 全部不寫、回報）、
+   writer 內含 gate（有任何 needs_review/BALANCE 對不上 → 全部不寫、回報）、
    §3 自動備份、§4 寫後全核驗、失敗自動還原。截圖來源請先依 MIGRATION.md §4.1 轉成 CSV。
+   2026-10-22 起「收盤留倉／跨日平倉」日（警告只有這兩種、每腿 100 股、版面在 10/16・10/19 核定範本內）
+   writer 直接照範本寫；範本外（同日平倉＋新留倉、部分平倉等）照舊不寫、回報。
 
 ## 引擎保證（對齊 CLAUDE.md 鐵則）
 
