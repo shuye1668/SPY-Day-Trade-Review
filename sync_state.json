@@ -1,8 +1,8 @@
 {
   "last_trade_date": "2026-10-21",
-  "status": "ok",
-  "note": "10/21 手動補入（Cash Balance 漏列 22:16 SELL，依 Trade History＋Total Cash 補列）",
-  "updated_utc": "2026-10-22T00:56:06Z",
+  "status": "blocked",
+  "note": "2026-10-22 需人工確認：writer exit 2 — CSV 視窗 10/19 起，10/19 平倉腿(已入帳)被引擎誤判為空單留倉，閘門擋下整批；10/22 新增 4 筆多單留倉(@763.1416/764.1999/762.09/761.805)未寫；另 10/22 開盤 BAL 較前收 -229,502.71 需確認",
+  "updated_utc": "2026-10-22T22:54:51Z",
   "host": "SHUYE07",
   "latest_in_trades_all": "2026-10-21"
 }
