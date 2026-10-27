@@ -489,6 +489,40 @@ if ($wr -eq 0) {
 
 ---
 
+## 【步驟 7.5】對帳單完整性檢查 statement_check.py（2026-10-22 新增，SHUYE07 回饋 #1）
+
+驗算之後、步驟 8 之前跑。這支由 **SHUYE07 維護**（git 送達 `C:\TradeReview\`，commit 93b23b1），
+**Boss 端只跑、不修改**。它比對 Trade History 每一筆 fill 是否都在 Cash Balance 找到對應 TRD 列，
+抓「成交有進 Total Cash、卻漏列在 Cash Balance」這種 TOS 匯出缺漏（2026-10-22 實際出過：
+10/21 22:16:02 SELL -100 SPY @768.95 被 Cash Balance 漏列，害 Boss 少報、SHUYE07 引擎誤判留倉）。
+
+```powershell
+$py = "C:\Users\TS USER\AppData\Local\Programs\Python\Python313\python.exe"
+$env:PYTHONIOENCODING = "utf-8"
+& $py C:\TradeReview\statement_check.py "C:\TradeReview\_inbox\$today.csv"
+$sc = $LASTEXITCODE
+Write-Host "STATEMENT_CHECK exit=$sc"
+```
+
+把 `$sc` 與程式 stdout **原樣留存**（步驟 9 要用）。依 `$sc` 分流：
+
+| `$sc` | 意義 | 動作 |
+|---|---|---|
+| `0` | `STATEMENT_CHECK=OK` | 照常進步驟 8 |
+| `4` | `STATEMENT_CHECK=INCOMPLETE` | 照常走步驟 8／9 寄信，但套用下列「INCOMPLETE 特例」 |
+| `2` | `STATEMENT_CHECK=ERROR` | 主旨加 `【STATEMENT_CHECK 失敗】`，正文最上面貼錯誤訊息，其餘照常 |
+
+**INCOMPLETE（`$sc=4`）特例**：
+- 主旨改成 `[SPY-DayTrade-Autosend] $today【CASH BALANCE 不完整】`
+- 把 statement_check.py 的 stdout **原樣**貼在正文最上面（用 `===== STATEMENT CHECK START/END =====` 包起來，見步驟 9 範本）
+- **就算 `NEW_TRADES=0` 也要寄信**（漏列的成交不會被算成新成交，不能靠步驟 8 的 0 判斷略過）
+- **絕不**自己補列或修改 CSV —— 缺漏交 SHUYE07 人工判斷
+
+> ⚠️ `$sc=4` 覆寫步驟 8 的「`NEW_TRADES=0` 不寄信」規則：完整性缺漏一定要寄出通知。
+> `$sc=2`（ERROR）不改變寄不寄的判斷，只在有寄信時加主旨標記與錯誤訊息。
+
+---
+
 ## 【步驟 8】判斷有沒有新成交 + 防重複
 
 **8.1 有沒有「沒寄過的新成交」**（對帳單一次涵蓋 7 天，所以不能只看有沒有 TRD 列，
@@ -502,6 +536,8 @@ $env:PYTHONIOENCODING = "utf-8"
 
 - 輸出 `NEW_TRADES=0` → **不建草稿、不寄信**，跳到步驟 9.5（git）→ 11 → 12 → 10，
   log 註記 `no new trades, no email`。
+  ⚠️ **例外**：若步驟 7.5 `$sc=4`（INCOMPLETE），即使 `NEW_TRADES=0` 仍要照步驟 9 寄信
+  （主旨加 `【CASH BALANCE 不完整】`、正文貼 statement_check 輸出），這時也要做 8.2 防重複。
 - 輸出 `NEW_TRADES=N`（N≥1）→ 繼續 8.2 與步驟 9。
 - 已寄過的成交記在 `C:\TradeReview_Boss\logs\reported_trades.txt`（每筆一行），
   **只在信寄出成功後**用 `--mark` 寫入（見 9.2）。不要手動編輯這個檔。
@@ -517,6 +553,7 @@ $env:PYTHONIOENCODING = "utf-8"
 
 - **收件人**：`juliahsu13@gmail.com`
 - **主旨**：`[SPY-DayTrade-Autosend] $today`
+  （步驟 7.5 `$sc=4` 時加 `【CASH BALANCE 不完整】`；`$sc=2` 時加 `【STATEMENT_CHECK 失敗】`）
 - **正文**（嚴格純文字，不要 HTML）
 
 **9.0 先產生對帳單文字表**（取代截圖：不附圖片，用純文字對齊表格呈現
@@ -702,6 +739,7 @@ push 失敗：
 | Source | CSV export ／ screenshot OCR |
 | CSV | `C:\TradeReview\_inbox\<date>.csv`（N bytes） |
 | 驗算 | N TRD rows — all pass within $0.02 (max diff $X) |
+| 完整性檢查 | OK ／ INCOMPLETE（主旨加【CASH BALANCE 不完整】）／ ERROR（主旨加【STATEMENT_CHECK 失敗】） |
 | 本機寫入 | ✓ 已寫入 trades_all ／ ⚠ 被 gate 擋下：`<原因>` |
 | 新成交 | N 筆（0 筆＝未寄信） |
 | Email | ✓ 已寄 juliahsu13@gmail.com（`<message-id>`）／ — 無新成交未寄 ／ ✗ 寄送失敗 |
@@ -808,6 +846,7 @@ push 失敗：
 
 | 日期 | 變更 |
 |---|---|
+| 2026-10-22 | **新增步驟 7.5（SHUYE07 回饋 #1）**：驗算後跑 `statement_check.py`（SHUYE07 維護，commit 93b23b1，Boss 只跑不改）比對 Trade History↔Cash Balance；`$sc=4` INCOMPLETE → 主旨加【CASH BALANCE 不完整】、貼輸出、即使 NEW_TRADES=0 也寄；`$sc=2` ERROR → 主旨加【STATEMENT_CHECK 失敗】；步驟 8/9/12 連動；起因 2026-10-22 Cash Balance 漏列 10/21 22:16 SELL |
 | 2026-10-20 | **採集隱形化**：新增步驟 1.5（`Wait-UserIdle`＋`Save-ScreenState`）、步驟 2 記原頁籤、步驟 10 切回原頁籤＋`Restore-ScreenState`（TOS 視窗大小/最小化、Z 順序、前景、游標原樣還原，5/15 秒背景補還原）並移到最後（9→9.5→11→12→10）；失敗時也還原（debug 截圖照存）。模組 `C:\TradeReview\boss_screen_state.ps1` 由 502 端維護（2026-10-21 於 Boss PC 套用） |
 | 2026-10-16 | **推送改三樣**：9.5 只推 `_inbox\`／`verify_shots\`／`BOSS_SKILL_current.md`（trades_all／sync_state 歸 502、不推）；9.5 推送前自動複製 SKILL 到 `BOSS_SKILL_current.md`；檔頭寫明改 SKILL 後要同步 CLAUDE.md 與 BOSS_SKILL_current.md |
 | 2026-10-16 | **舊內容校正**：座標改為 build 1993 實測（主頁籤 y≈33、Monitor 262、Charts 557）；新增「Claude 搶前景」坑與 `Activate-TOSWindowVerified`；步驟 4 改為 N≥5 不動；步驟 5 改用 `Open-ExportDialog`／`Confirm-ExportSave`（鍵盤選單、不打檔名再改名）；步驟 9.5 推送清單加 `verify_shots\`、repo 卡 rebase 時不跑 push；步驟 10 改用 `Switch-ToCharts` |
