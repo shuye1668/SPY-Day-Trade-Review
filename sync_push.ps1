@@ -62,7 +62,26 @@ if ($Owner -eq 'boss') {
     }
 }
 
+function Report-PullFail($r) {
+    if ($r.Aborted) {
+        Say "  [X] pull --rebase 失敗，已自動 git rebase --abort（repo 回到 pull 前狀態，本機 commit 仍在）"
+        if ($r.Conflicts.Count -gt 0) { Say "      衝突檔：$($r.Conflicts -join ', ')" }
+        Log "FAIL pull-rebase ABORTED conflicts=$($r.Conflicts -join ', ') :: $($r.Output)"
+    } else {
+        Say "  [X] pull --rebase 失敗：$($r.Output)"
+        Log "FAIL pull-rebase (abort=$($r.Aborted)) :: $($r.Output)"
+    }
+}
+
 try {
+    # 上一輪遺留的 rebase（2026-10-27 前的舊版會留下）：不自動處理——rebase 中途
+    # 可能有 stage 了還沒 commit 的資料，abort 會丟掉。大聲停下等人工。
+    if (Test-RebaseInProgress) {
+        Say "  [X] repo 停在未完成的 rebase（.git\rebase-merge 存在），不推送；請人工處理後重跑"
+        Log "FAIL rebase-in-progress (pre-existing)"
+        exit 1
+    }
+
     Invoke-Git fetch origin | Out-Null
 
     # 先 stage 自己的改動，pull --rebase 才不會被 unstaged changes 擋掉
@@ -150,7 +169,9 @@ try {
     # --autostash：working tree 可能還有「對方所有物」的未 staged 改動
     # （例如 502 上出現了 Boss 才該寫的 sync_state.json），那會讓 rebase
     # 直接失敗。autostash 會自動收起再放回，不必人工介入。
-    Invoke-Git pull --rebase --autostash origin main | Out-Null
+    # 失敗時 Invoke-PullRebase 會自動 rebase --abort（見 _git_helper.ps1）
+    $r = Invoke-PullRebase -AutoStash
+    if (-not $r.Ok) { Report-PullFail $r; exit 1 }
 
     # push 失敗要重試：無人看管下靜默失敗＝對方拿到舊資料卻不知道
     $ok = $false
@@ -158,7 +179,8 @@ try {
         if ((Try-Git push origin main) -eq 0) { $ok = $true; break }
         Say "  push 第 $i 次失敗，重試..."
         Start-Sleep -Seconds (5 * $i)
-        Try-Git pull --rebase --autostash origin main | Out-Null
+        $r = Invoke-PullRebase -AutoStash
+        if (-not $r.Ok) { Report-PullFail $r; break }
     }
 
     if ($ok) {

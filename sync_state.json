@@ -1,8 +1,8 @@
 {
   "last_trade_date": "2026-10-21",
   "status": "blocked",
-  "note": "2026-10-23 需人工確認：writer exit 2 — CSV 視窗 10/17 起，10/19 平倉腿(已入帳)被引擎誤判為空單留倉，閘門擋下整批；10/22 4 筆多單留倉(@763.1416/764.1999/762.09/761.805)仍未寫；10/23 再加碼留倉 100股 @760.87(範本外：留倉中又加碼)；trades_all 停在 10/21",
-  "updated_utc": "2026-10-23T22:55:21Z",
+  "note": "2026-10-26 無新成交（Boss NEW_TRADES=0＋TOS 截圖核對）；10/22、10/23 留倉待人工寫入；Boss repo 卡 rebase（sync_state.json 衝突）未推送 10/27 CSV",
+  "updated_utc": "2026-10-27T01:42:29Z",
   "host": "SHUYE07",
   "latest_in_trades_all": "2026-10-21"
 }

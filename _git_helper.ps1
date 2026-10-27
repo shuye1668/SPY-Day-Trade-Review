@@ -37,3 +37,44 @@ function Try-Git {
     }
     return $LASTEXITCODE
 }
+
+# repo 是否停在 rebase 中間（.git\rebase-merge 或 rebase-apply 存在）
+function Test-RebaseInProgress {
+    $gitDir = (Invoke-Git rev-parse --git-dir | Out-String).Trim()
+    return ((Test-Path (Join-Path $gitDir 'rebase-merge')) -or (Test-Path (Join-Path $gitDir 'rebase-apply')))
+}
+
+# pull --rebase 失敗就一定 abort（2026-10-27 加，勿移除）。
+# 原本 pull --rebase 衝突時直接 throw，repo 就停在 rebase 中間（detached HEAD），
+# 之後每天的 push/pull 都失敗或在 detached HEAD 上堆孤兒 commit —— Boss 2026-08-11
+# 卡兩個月、2026-10-23 又卡在 sync_state.json 衝突，都是這樣來的。
+# abort 會回到 pull 前的分支與 commit，--autostash 收起的改動也會放回，資料不掉；下次執行再試。
+# 回傳 @{ Ok; Aborted; Conflicts; Output }，由呼叫端決定怎麼記 log、回什麼 exit code。
+function Invoke-PullRebase {
+    param([switch]$AutoStash)
+    $pullArgs = @('pull', '--rebase')
+    if ($AutoStash) { $pullArgs += '--autostash' }
+    $pullArgs += @('origin', 'main')
+
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & git.exe @pullArgs 2>&1
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+    $code = $LASTEXITCODE
+    $result = @{ Ok = ($code -eq 0); Aborted = $false; Conflicts = @(); Output = ($out | Out-String).Trim() }
+    if ($code -ne 0 -and (Test-RebaseInProgress)) {
+        $prev = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $result.Conflicts = @(& git.exe -c core.quotepath=false diff --name-only --diff-filter=U 2>$null)
+        } finally {
+            $ErrorActionPreference = $prev
+        }
+        Try-Git rebase --abort | Out-Null
+        $result.Aborted = -not (Test-RebaseInProgress)
+    }
+    return $result
+}

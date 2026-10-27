@@ -70,7 +70,14 @@ try {
 
     $before = (Invoke-Git rev-parse HEAD | Out-String).Trim()
     Invoke-Git fetch origin | Out-Null
-    Invoke-Git pull --rebase origin main | Out-Null
+    # 失敗時 Invoke-PullRebase 會自動 rebase --abort，不讓 repo 停在 rebase 中間（_git_helper.ps1）
+    $r = Invoke-PullRebase
+    if (-not $r.Ok) {
+        $why = if ($r.Aborted) { "已自動 rebase --abort；衝突檔：$($r.Conflicts -join ', ')" } else { $r.Output }
+        Say "  [X] pull --rebase 失敗（$why）"
+        Log "FAIL pull-rebase aborted=$($r.Aborted) conflicts=$($r.Conflicts -join ', ') :: $($r.Output)"
+        exit 1
+    }
     $after = (Invoke-Git rev-parse HEAD | Out-String).Trim()
 
     if ($before -eq $after) {
