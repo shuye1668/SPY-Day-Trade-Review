@@ -628,9 +628,12 @@ powershell -ExecutionPolicy Bypass -File C:\TradeReview\sync_push.ps1 -Owner bos
 只會推 `_inbox\` / `verify_shots\` / `BOSS_SKILL_current.md` 三樣（2026-10-16 所有權定案）。
 `trades_all.xlsx` 與 `sync_state.json` **歸 502**：本機照樣由 writer／write_sync_state 寫入供乾跑驗證，
 但**不推送**；新版 sync_pull 會在每次 pull 前丟棄這兩個檔的本機改動，以 502 版本為準。
-⚠️ 2026-08-11 起 repo 卡在未完成的 interactive rebase（`.git\rebase-merge` 存在）：
-存在時**不要跑 sync_push**（只會在 detached HEAD 上堆孤兒 commit），log 記 `PUSH SKIPPED (repo in rebase)`，
-**不要自行修復**，等使用者手動處理。
+rebase 防卡（2026-10-27）：sync_push／sync_pull 的 `pull --rebase` 失敗時會**自動 `git rebase --abort`**，
+repo 不會再停在 rebase 中間；當次 exit 1、輸出 `[X] pull --rebase 失敗，已自動 git rebase --abort`＋衝突檔名
+→ log 記 `PUSH FAILED (rebase conflict: <檔名>)`，寫進步驟 11 log 與回報，**不要自行解衝突**（下次執行會自動再試；
+若連續兩天同一檔衝突，回報使用者）。
+若 sync_push 輸出 `[X] repo 停在未完成的 rebase`（舊版遺留）→ 不推送、**不要自行修復**，回報使用者處理。
+衝突最常見原因：commit 裡混進 502 所有物（`trades_all.xlsx`／`sync_state.json`）——一律只用 `sync_push.ps1 -Owner boss`，絕不 `git add -A`。
 push 失敗會自動重試 3 次；三次都失敗時本機 commit 仍在（**資料沒掉**），
 但要把這件事寫進步驟 11 的 log 與 Gmail 草稿正文。
 
@@ -846,6 +849,7 @@ push 失敗：
 
 | 日期 | 變更 |
 |---|---|
+| 2026-10-27 | **rebase 防卡**：sync_push/sync_pull `pull --rebase` 失敗自動 `rebase --abort`（`_git_helper.ps1` `Invoke-PullRebase`）；9.5 過時的「2026-08-11 起卡 rebase」註記改為新處置；根因＝10/24 commit 混入 sync_state.json，10/27 人工修復（HEAD 710a581） |
 | 2026-10-22 | **新增步驟 7.5（SHUYE07 回饋 #1）**：驗算後跑 `statement_check.py`（SHUYE07 維護，commit 93b23b1，Boss 只跑不改）比對 Trade History↔Cash Balance；`$sc=4` INCOMPLETE → 主旨加【CASH BALANCE 不完整】、貼輸出、即使 NEW_TRADES=0 也寄；`$sc=2` ERROR → 主旨加【STATEMENT_CHECK 失敗】；步驟 8/9/12 連動；起因 2026-10-22 Cash Balance 漏列 10/21 22:16 SELL |
 | 2026-10-20 | **採集隱形化**：新增步驟 1.5（`Wait-UserIdle`＋`Save-ScreenState`）、步驟 2 記原頁籤、步驟 10 切回原頁籤＋`Restore-ScreenState`（TOS 視窗大小/最小化、Z 順序、前景、游標原樣還原，5/15 秒背景補還原）並移到最後（9→9.5→11→12→10）；失敗時也還原（debug 截圖照存）。模組 `C:\TradeReview\boss_screen_state.ps1` 由 502 端維護（2026-10-21 於 Boss PC 套用） |
 | 2026-10-16 | **推送改三樣**：9.5 只推 `_inbox\`／`verify_shots\`／`BOSS_SKILL_current.md`（trades_all／sync_state 歸 502、不推）；9.5 推送前自動複製 SKILL 到 `BOSS_SKILL_current.md`；檔頭寫明改 SKILL 後要同步 CLAUDE.md 與 BOSS_SKILL_current.md |
