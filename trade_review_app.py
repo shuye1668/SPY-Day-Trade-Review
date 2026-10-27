@@ -935,6 +935,10 @@ def day_stats(ds):
     hi_d=max((d for d in dates if d>w52),key=lambda d:daily[d]["h"])
     hi=daily[hi_d]["h"]
     out.update(high=round(hi,2),highDate=hi_d,fromHighPct=round((close/hi-1)*100,2))
+    # 日均線（2026-10-27 使用者要求：線圖 MA 顯示 20/60/100/200 日線）：當天之前 N 個交易日收盤的簡單平均，
+    # 開盤前就已知、盤中不漂，在分 K 圖上畫成水平參考線
+    prior=[d for d in dates if d<ds]
+    out["ma"]={str(n):round(sum(daily[d]["c"] for d in prior[-n:])/n,2) for n in (20,60,100,200) if len(prior)>=n}
     return out
 
 @app.route("/api/version")
@@ -1153,7 +1157,7 @@ canvas{display:block;width:100%;height:100%}
 <span class="pnl" id="dp">---</span><span class="tc" id="dtc"></span>
 <select id="cvsel" title="色版"></select>
 <span id="legend"></span>
-<span class="ind-toggles"><button id="tVWAP" class="ind-btn" title="VWAP">V</button><button id="tBB" class="ind-btn" title="Bollinger Bands">BB</button><button id="tMA" class="ind-btn" title="20 MA">MA</button><button id="tPC" class="ind-btn" title="前日收盤價">C</button></span>
+<span class="ind-toggles"><button id="tVWAP" class="ind-btn" title="VWAP">V</button><button id="tBB" class="ind-btn" title="Bollinger Bands">BB</button><button id="tMA" class="ind-btn" title="日均線 20/60/100/200">MA</button><button id="tPC" class="ind-btn" title="前日收盤價">C</button></span>
 <div id="zc"><button id="zo" title="Zoom Out (-)">&#8722;</button><button id="zi" title="Zoom In (+)">&#43;</button><button id="zr" title="Reset View">R</button><button id="be" title="輸出 PNG">⤓ Export</button></div>
 </div>
 <div id="cc"><canvas id="cv"></canvas><div id="nb"></div><div id="ld">載入中 ...</div></div>
@@ -1310,18 +1314,30 @@ function drawIndicators(ctx,di,candles,pn,px,exportMode){
     ctx.stroke();
   }
 
-  // 20 MA
-  if(indState.ma||indState.bb){
-    const sma=calcSMA(candles,20);
-    if(indState.ma){
-      ctx.strokeStyle="rgba(33,150,243,0.6)";ctx.lineWidth=1;ctx.setLineDash([]);
-      ctx.beginPath();let started=false;
-      for(let i=0;i<candles.length;i++){
-        if(sma[i]===null)continue;
-        const x=xOfGi(gi(di,i)),y=yOf(sma[i],pn,px);
-        if(!started){ctx.moveTo(x,y);started=true;}else ctx.lineTo(x,y);
+  // 日均線 20/60/100/200（2026-10-27 使用者要求；數值來自後端 day_stats 的 stats.ma＝前 N 日收盤平均）
+  // 每條是當天的水平線；超出目前價格範圍的不畫線，改在上/下緣標價位＋箭頭，讓人知道它在哪
+  if(indState.ma&&candles.length){
+    const st=(dayCache.get(dayList[di])||{}).stats;
+    const ma=st&&st.ma;
+    if(ma){
+      const MA_COLS={"20":"rgba(33,150,243,0.85)","60":"rgba(76,175,80,0.85)","100":"rgba(171,71,188,0.85)","200":"rgba(239,83,80,0.85)"};
+      const x0=xOfGi(gi(di,0)),x1=xOfGi(gi(di,candles.length-1));
+      // 標籤貼在當天右端（左上角有日期標記）；當天露出的寬度不夠放標籤就不標，避免相鄰兩天的標籤疊在一起
+      const lx=Math.min(x1,W-M.r)-3;
+      const showLbl=lx-Math.max(x0,M.l)>110;
+      ctx.font="10px Consolas,monospace";ctx.textAlign="right";
+      let topN=0,botN=0;
+      for(const n of ["20","60","100","200"]){
+        if(ma[n]==null)continue;
+        const v=ma[n],y=yOf(v,pn,px),col=MA_COLS[n];
+        ctx.fillStyle=col;
+        if(y<M.t){if(showLbl){ctx.textBaseline="top";ctx.fillText(`↑MA${n} ${v.toFixed(2)}`,lx,M.t+2+12*topN++);}continue;}
+        if(y>M.t+cH){if(showLbl){ctx.textBaseline="bottom";ctx.fillText(`↓MA${n} ${v.toFixed(2)}`,lx,M.t+cH-2-12*botN++);}continue;}
+        ctx.strokeStyle=col;ctx.lineWidth=1.2;ctx.setLineDash([]);
+        ctx.beginPath();ctx.moveTo(x0,y);ctx.lineTo(x1,y);ctx.stroke();
+        if(showLbl){ctx.textBaseline="bottom";ctx.fillText(`MA${n} ${v.toFixed(2)}`,lx,y-2);}
       }
-      ctx.stroke();
+      ctx.textBaseline="alphabetic";
     }
   }
 
