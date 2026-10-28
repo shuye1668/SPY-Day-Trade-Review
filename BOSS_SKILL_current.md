@@ -6,7 +6,7 @@ description: 美股交易日的台灣早上 06:00 TOS 採集；有新成交才�
 # 每日 TOS 採集 routine（Boss PC，權威版）
 
 > 本檔是自足的 —— 執行時**不需要**再去讀別的規則檔。
-> 最後更新：2026-10-21（採集隱形化：步驟 1.5／2／10／失敗處理）。
+> 最後更新：2026-10-28（已寫入日不再擋 gate＋「502」正名 SHUYE07＋步驟 0.5 開工前同步）。
 >
 > ⚠️ **規則只能有一份。** 2026-08-11 查出的事故：這個排程原本內嵌 2026-07-17 的
 > OCR-only 流程，同時 `C:\TradeReview_Boss\CLAUDE.md` 另有一份較新的規則，兩者
@@ -14,7 +14,7 @@ description: 美股交易日的台灣早上 06:00 TOS 採集；有新成交才�
 > 導致本機寫入與 git 同步從未執行、每天都要人工補帳。
 > **要改流程請改本檔，不要在別處另寫一份。** 改完要做兩件事：
 > ① 把正文整份複製回 `C:\TradeReview_Boss\CLAUDE.md`（開頭說明保留）；
-> ② 複製本檔到 `C:\TradeReview\BOSS_SKILL_current.md`（步驟 9.5 每次推送前也會自動做），502 端母版靠它刷新。
+> ② 複製本檔到 `C:\TradeReview\BOSS_SKILL_current.md`（步驟 9.5 每次推送前也會自動做），SHUYE07 端母版靠它刷新。
 
 ---
 
@@ -23,7 +23,7 @@ description: 美股交易日的台灣早上 06:00 TOS 採集；有新成交才�
 依兩段式架構，**Boss PC 只做第一段**：對帳單 → `trades_all.xlsx`。
 
 ```
-Boss PC（這台，C:\TradeReview）                 502（D:\fileserver_D\TradeReview）
+Boss PC（這台，C:\TradeReview）                 SHUYE07（D:\fileserver\書業(新)\000AI專區\1. 程式檔(勿動勿移)\SPYTradeReview）
 ──────────────────────────────                 ────────────────────────────────
 TOS → 採集（CSV 為主／OCR 備援）
   ├─ engine 乾跑（BALANCE 閘門）
@@ -32,7 +32,7 @@ TOS → 採集（CSV 為主／OCR 備援）
   ├─ Gmail 草稿（保留為退路）
   └─ sync_push -Owner boss ─→ GitHub ─→ sync_pull ─→ 第二段
                                                        cs_from_trades.py
-                                                       → CS交易紀錄.xlsx（人工修正在這）
+                                                       → CS交易紀錄.xlsx（範本內特例日 writer 自動寫，範本外才人工）
 ```
 
 **Email（2026-10-16 起）**：只有出現「尚未寄過的新成交」時，才建草稿並**由本 routine 直接寄出**到
@@ -43,7 +43,7 @@ TOS → 採集（CSV 為主／OCR 備援）
 ### 🔴 三條鐵則
 
 1. **writer 一定要帶 `--trades-only`。** 不帶會去寫 `CS交易紀錄.xlsx` 與
-   `offset_state.json` —— 那是 502 的所有物，會製造出永遠推不出去、還會卡住
+   `offset_state.json` —— 那是 SHUYE07 的所有物，會製造出永遠推不出去、還會卡住
    自己 pull 的本機改動。
 2. **不得手動編輯任何 `.xlsx`。** 所有寫入只能經由 engine / writer。
 3. **不得用 `git add -A`。** 一律用 `sync_push.ps1 -Owner boss`。
@@ -59,7 +59,7 @@ Windows 工作排程器的 `Claude-TOS-Collector-Launch` 在同一天 **05:45** 
 
 - **一次跑會補完所有欠帳**：步驟 4 要求「至少 5 days back」（平常是 7）不是保險，是必要的。
   writer 會處理 CSV 裡所有 session，已寫過的自動冪等跳過。
-- **週一落後一個交易日是正常的**，不是故障。502 的 App 標頭那段時間會顯示
+- **週一落後一個交易日是正常的**，不是故障。SHUYE07 的 App 標頭那段時間會顯示
   琥珀色「⚠待補前一交易日」，補完轉回灰色。
 - 顯示**紅色「✕落後 N 個交易日」**（N≥2）才代表真的有事沒跑成。
 
@@ -122,6 +122,27 @@ $py = "C:\Users\TS USER\AppData\Local\Programs\Python\Python313\python.exe"
 
 ---
 
+## 【步驟 0.5】開工前同步＋自我檢查（2026-10-28 新增）
+
+只有步驟 0 `US_SESSION=YES`（或手動補跑）才做；休市日照舊直接結束。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File C:\TradeReview\boss_preflight.ps1
+```
+
+- 檔案不存在（patch 剛套用、git 還沒送到）→ 改跑
+  `powershell -ExecutionPolicy Bypass -File C:\TradeReview\sync_pull.ps1 -Owner boss`，結果記為 PREFLIGHT_PULL。
+- 把每一行 `PREFLIGHT_*` 原樣記下，步驟 11 log、步驟 12 回報要用。
+- **任何結果都照常繼續步驟 1**（這一步只回報、不修）：
+  - `PULL=SKIPPED／FAILED` → 用本機現有程式照跑；9.5 推送時會再試一次。
+  - `REBASE=STUCK` → 照常採集、寄信，但 9.5 會推不出去；**不要自行修復**，回報第一行寫「⚠ repo 卡在 rebase」。
+  - `PENDING_PATCHES` 不是 none → 照現行 SKILL 跑，**不要在無人看管時自己套 patch**，回報裡列出檔名。
+- 同時查本排程自己的權限模式：呼叫 `mcp__ccd_session_mgmt__get_session`（`session_id: "self"`）看 `permissionMode`
+  （工具不存在或呼叫失敗就記 `unknown`，不要為此停下）。不是 `auto` → 回報寫
+  「⚠ 排程權限模式=<值>，無人看管時可能卡在允許提示；請到 Claude Desktop 的排程設定改成 Auto」。
+
+---
+
 ## 【步驟 1】載入 helper + 取得今天日期
 
 ```powershell
@@ -162,7 +183,7 @@ if (-not (Test-Path $ss)) { Save-ScreenState -Path $ss | Out-Null }   # 補跑/�
 - 回 `$false`（使用者一直在用）→ 同一段再呼叫最多 2 次（共約 27 分鐘）；仍在用就照跑，
   log 註記 `user active, ran anyway`。
 - `Save-ScreenState` 記下：前景視窗、所有視窗 Z 順序、TOS 視窗大小/位置/最小化狀態、游標位置。
-- 模組 `C:\TradeReview\boss_screen_state.ps1` 由 502 端維護、經 git 送達；只做視窗管理
+- 模組 `C:\TradeReview\boss_screen_state.ps1` 由 SHUYE07 端維護、經 git 送達；只做視窗管理
   （不點擊、不打字、不關視窗），失敗不 throw。檔案不存在 → 先跑 `sync_pull.ps1 -Owner boss`，
   仍沒有就略過 1.5／10.5，log 註記 `screen_state module missing`，其餘流程照常。
 
@@ -440,13 +461,13 @@ cd C:\TradeReview
 & $py spy_daytrade_writer.py $csv --commit --trades-only
 $wr = $LASTEXITCODE
 
-# 記錄狀態供 502 的 App 顯示新鮮度
+# 本機乾跑用；sync_state 歸 SHUYE07，不推送
 # ⚠️ 不要帶 --date $today。這台週末關機，「今天」不等於「資料涵蓋到哪一天」；
 #    省略 --date 會自動讀 trades_all 裡真正的最新交易日。
 if ($wr -eq 0) {
     & $py write_sync_state.py
 } else {
-    & $py write_sync_state.py --status blocked --note "writer gate 擋下，需人工確認"
+    & $py write_sync_state.py --status blocked --note "Boss 本機 gate 擋下（未寫入日），交 SHUYE07"
 }
 ```
 
@@ -460,11 +481,15 @@ if ($wr -eq 0) {
 
 ### 被 gate 擋下時：什麼都不要改
 
-`trades_all` 停在前一日**是正確的，不是壞掉**。照常繼續步驟 8 建草稿，把被擋原因
-寫進正文，交由 502 人工處理。
+`--trades-only` 只把**還沒在 trades_all 的交易日**拿去過 gate（2026-10-28 起；已寫過的日子直接冪等跳過，
+不再因 7 天匯出範圍內有舊的留倉／平倉日而整份擋下）。被擋時 trades_all 停在前一日**是正確的，不是壞掉**。
+照常繼續步驟 8，把被擋原因寫進正文，交由 **SHUYE07** 處理：
+- 只有「收盤留倉」及／或「跨日平倉」→ 正文寫「留倉／跨日平倉特例日，SHUYE07 依核定範本自動寫入」，
+  **不要寫「需人工確認」**（SHUYE07 的 writer 會自動寫：留倉建立日、平倉日、留倉中又加碼留倉）；
+- 其他原因（`BALANCE 對不上`、`非交易現金異動（DOI/JRN）`、`session 開盤/收盤餘額不明`、非 100 股）
+  → 正文寫「SHUYE07 需人工確認：<原因>」。
 
-會被擋下的情況：`BALANCE 對不上`、`收盤留倉`、`非交易現金異動（DOI/JRN）`、
-`session 開盤/收盤餘額不明`。
+隔天 sync_pull 會帶回 SHUYE07 已寫好的 trades_all，那幾天之後就自動冪等跳過、不會再擋。
 
 > 這是最高原則：**絕不為了跑完流程而寫入估算／推算／猜值。**
 
@@ -571,7 +596,7 @@ $env:PYTHONIOENCODING = "utf-8"
 OCR 備援路徑時同樣對 OCR 產出的 CSV 跑這支（只有 Cash Balance 一段，其他段會顯示 section not found，正常）。
 
 【步驟 9.0b】驗證截圖本機留存（2026-10-16 起，當日 CSV 含至少一列 TRD 才做）
-目的：502 端把圖貼進 Julia 的 Excel 母檔，供讀者對照 TOS 原始畫面核驗。 不附進任何信件或草稿（base64 超過可靠處理長度）。純 BAL 無交易日略過。
+目的：SHUYE07 端把圖貼進 Julia 的 Excel 母檔，供讀者對照 TOS 原始畫面核驗。 不附進任何信件或草稿（base64 超過可靠處理長度）。純 BAL 無交易日略過。
 
 擷取範圍：Cash Balance（含 BAL/TRD/DOI/JRN/TOTAL 每一列）＋ Order History（全部 FILLED 列）＋ Trade History（全部 fill 列），無遮擋。優先從流程中已確認過的全螢幕 截圖裁切，避免重拍時視窗搶前景；不動日期範圍欄位（改 days back 曾讓 TOS 當掉）， 現有範圍涵蓋即可。
 存 C:\TradeReview_Boss\logs\TOS_verify_$today.png（放不下分段 _b/_c）， 再複製到 C:\TradeReview\verify_shots\（不存在就建；不放 _inbox\，那裡只放 CSV）。
@@ -616,24 +641,26 @@ Auto-generated by Claude Code on Boss PC
 
 ## 【步驟 9.5】★ 推送到 GitHub
 
+> 步驟 0.5 已先 pull 過；這裡的 `pull --rebase` 只是推送前再同步一次，照舊。
+
 ```powershell
 # git 是 2026-10-16 才裝的（C:\Program Files\Git\cmd）；比它更早啟動的 Claude Desktop 沿用舊 PATH，
 # 不刷新就會找不到 git.exe → 每次推送前先從系統設定刷新 PATH
 $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')
-# 先把現行 SKILL 全文複製進 repo（502 端母版靠這個檔刷新；每次推送前都做，確保永遠是最新版）
+# 先把現行 SKILL 全文複製進 repo（SHUYE07 端母版靠這個檔刷新；每次推送前都做，確保永遠是最新版）
 Copy-Item "C:\Users\TS USER\.claude\scheduled-tasks\tos-daily-collector\SKILL.md" "C:\TradeReview\BOSS_SKILL_current.md" -Force
 powershell -ExecutionPolicy Bypass -File C:\TradeReview\sync_push.ps1 -Owner boss
 ```
 
 只會推 `_inbox\` / `verify_shots\` / `BOSS_SKILL_current.md` 三樣（2026-10-16 所有權定案）。
-`trades_all.xlsx` 與 `sync_state.json` **歸 502**：本機照樣由 writer／write_sync_state 寫入供乾跑驗證，
-但**不推送**；新版 sync_pull 會在每次 pull 前丟棄這兩個檔的本機改動，以 502 版本為準。
+`trades_all.xlsx` 與 `sync_state.json` **歸 SHUYE07**：本機照樣由 writer／write_sync_state 寫入供乾跑驗證，
+但**不推送**；新版 sync_pull 會在每次 pull 前丟棄這兩個檔的本機改動，以 SHUYE07 版本為準。
 rebase 防卡（2026-10-27）：sync_push／sync_pull 的 `pull --rebase` 失敗時會**自動 `git rebase --abort`**，
 repo 不會再停在 rebase 中間；當次 exit 1、輸出 `[X] pull --rebase 失敗，已自動 git rebase --abort`＋衝突檔名
 → log 記 `PUSH FAILED (rebase conflict: <檔名>)`，寫進步驟 11 log 與回報，**不要自行解衝突**（下次執行會自動再試；
 若連續兩天同一檔衝突，回報使用者）。
 若 sync_push 輸出 `[X] repo 停在未完成的 rebase`（舊版遺留）→ 不推送、**不要自行修復**，回報使用者處理。
-衝突最常見原因：commit 裡混進 502 所有物（`trades_all.xlsx`／`sync_state.json`）——一律只用 `sync_push.ps1 -Owner boss`，絕不 `git add -A`。
+衝突最常見原因：commit 裡混進 SHUYE07 所有物（`trades_all.xlsx`／`sync_state.json`）——一律只用 `sync_push.ps1 -Owner boss`，絕不 `git add -A`。
 push 失敗會自動重試 3 次；三次都失敗時本機 commit 仍在（**資料沒掉**），
 但要把這件事寫進步驟 11 的 log 與 Gmail 草稿正文。
 
@@ -721,6 +748,9 @@ append 到 `C:\TradeReview_Boss\logs\daily_run.log`：
 本機寫入被 gate 擋下（有新成交時信仍照寄）：
 [YYYY-MM-DD HH:MM:SS] PARTIAL - emailed N new trades, local write BLOCKED: <原因>
 
+全部已在 trades_all（冪等跳過）：
+[YYYY-MM-DD HH:MM:SS] OK (CSV) - N rows, local write SKIPPED (all days already in trades_all), pushed <sha>, screen restore next
+
 push 失敗：
 [YYYY-MM-DD HH:MM:SS] PARTIAL - local write OK, PUSH FAILED after 3 retries
 
@@ -730,6 +760,9 @@ push 失敗：
 [YYYY-MM-DD HH:MM:SS] FAIL - <step> - <reason>
 ```
 
+⚠️ 每一行 log 行尾加 preflight 摘要（步驟 0.5 取得）：
+`preflight pull=<OK|SKIPPED|FAILED> rebase=<OK|STUCK> patches=<none|N 個> perm=<auto|default|unknown|...>`。
+
 ---
 
 ## 【步驟 12】最終回報
@@ -738,17 +771,23 @@ push 失敗：
 
 | 項目 | 值 |
 |------|-----|
+| 開工前同步 | ✓ pull OK（HEAD <sha>） ／ ⚠ SKIPPED／FAILED：<原因> ／ ⚠ repo 卡在 rebase |
+| 待套用 patch | none ／ ⚠ <檔名>（請使用者在場時要 Boss 套用） |
+| 排程權限模式 | auto ／ ⚠ <值>（請改 Auto） ／ unknown |
 | Date | YYYY-MM-DD |
 | Source | CSV export ／ screenshot OCR |
 | CSV | `C:\TradeReview\_inbox\<date>.csv`（N bytes） |
 | 驗算 | N TRD rows — all pass within $0.02 (max diff $X) |
 | 完整性檢查 | OK ／ INCOMPLETE（主旨加【CASH BALANCE 不完整】）／ ERROR（主旨加【STATEMENT_CHECK 失敗】） |
-| 本機寫入 | ✓ 已寫入 trades_all ／ ⚠ 被 gate 擋下：`<原因>` |
+| 本機寫入 | ✓ 已寫入 trades_all ／ — 全部已存在（冪等跳過） ／ ⚠ 被 gate 擋下：<原因>（留倉/平倉 → SHUYE07 自動寫；其他 → SHUYE07 人工） |
 | 新成交 | N 筆（0 筆＝未寄信） |
 | Email | ✓ 已寄 juliahsu13@gmail.com（`<message-id>`）／ — 無新成交未寄 ／ ✗ 寄送失敗 |
 | Subject | `[SPY-DayTrade-Autosend] <date>` |
 | git push | ✓ `<sha>` ／ ✗ 三次重試均失敗 |
-| 畫面還原 | 原頁籤 `<tab>`；`Restore-ScreenState` foreground=True ／ partial（non-fatal） |
+| 畫面還原 | 原頁籤 <tab>；Restore-ScreenState foreground=True（原前景是 Claude 時註明改前景到哪個視窗）／ partial（non-fatal） |
+
+回報第一行規則：上面三列（開工前同步／待套用 patch／排程權限模式）全正常、且採集／寄信／推送都成功
+→ 第一行寫 `🟢 Boss 採集全部完成`；任一列有 ⚠ → 第一行寫 `🟡 Boss 採集完成，但有 N 項要處理`，接著逐項列出。
 
 回報表格在步驟 10 **之前**寫好；步驟 10 跑完只補一句還原結果，不再做其他動作。
 
@@ -763,7 +802,7 @@ push 失敗：
    （**只建草稿留紀錄，不寄出** —— 只有成功取得新成交時才寄信）
 3. log 記 FAIL 行
 4. 執行 `& $py write_sync_state.py --status failed --note "<reason>"`
-   （讓 502 的 App 標頭轉紅；同樣**不要帶 `--date`**）
+   （讓 SHUYE07 的 App 標頭轉紅；同樣**不要帶 `--date`**）
 5. 對話中回報具體失敗位置 + 建議下一步
 6. **最後**照步驟 10 切回原頁籤並 `Restore-ScreenState`（2026-10-20 起取代舊規則「保持畫面在失敗當下」：
    人工檢查看第 1 點的 debug 截圖就好，不讓使用者看到停在錯誤畫面的 TOS）。
@@ -804,12 +843,12 @@ push 失敗：
 | `verify_shots\TOS_verify_*.png` | 步驟 9.0b 複製的驗證截圖（2026-10-16 起） |
 | `BOSS_SKILL_current.md` | 步驟 9.5 推送前從 SKILL.md 原樣複製（2026-10-16 起） |
 
-**❌ 絕對不可寫**（502 的所有物）：
+**❌ 絕對不可寫**（SHUYE07 的所有物）：
 `CS交易紀錄.xlsx`、`CS交易紀錄_dump.txt`、`offset_state.json`、`notes\`
 
 **❌ 其他禁止**：
 - 不可用 Excel 或任何方式**手動編輯**任何 `.xlsx`
-- 不可修改 `trade_review_app.py` 或任何 `.py`（程式碼在 502 改，Boss 靠 git pull）
+- 不可修改 `trade_review_app.py` 或任何 `.py`（程式碼在 SHUYE07 改，Boss 靠 git pull）
 - 不可執行**不帶 `--trades-only`** 的 `spy_daytrade_writer.py`
 - 不可用 `git add -A` —— 一律 `sync_push.ps1 -Owner boss`
 - 不可為了讓流程跑完而修改任何數字
@@ -849,10 +888,12 @@ push 失敗：
 
 | 日期 | 變更 |
 |---|---|
+| 2026-10-28 | **已寫入日不再擋 gate**：`--trades-only` 先排除 trades_all 已有的交易日再過 gate（10/28 一輪因 10/22–10/27 留倉/平倉在 7 天範圍內整份擋下）；被擋時留倉/跨日平倉寫「SHUYE07 依範本自動寫入」，不再寫需人工；**「502」全檔正名 SHUYE07**（識別字 `p502` 不變）；畫面還原：原前景＝Claude 時改把前景交給 Z 順序下一個視窗（`boss_screen_state.ps1`） |
+| 2026-10-28 | **每日順跑**：新增步驟 0.5 `boss_preflight.ps1`（開工前 `sync_pull -Owner boss`，SHUYE07 改的程式當天生效；檢查 rebase 卡住、守門排程、待套用 BOSS_PATCH、排程權限模式；只回報不修、不擋採集）；步驟 11 log 行尾加 preflight 摘要；步驟 12 表格加三列＋第一行 🟢／🟡 規則 |
 | 2026-10-27 | **rebase 防卡**：sync_push/sync_pull `pull --rebase` 失敗自動 `rebase --abort`（`_git_helper.ps1` `Invoke-PullRebase`）；9.5 過時的「2026-08-11 起卡 rebase」註記改為新處置；根因＝10/24 commit 混入 sync_state.json，10/27 人工修復（HEAD 710a581） |
 | 2026-10-22 | **新增步驟 7.5（SHUYE07 回饋 #1）**：驗算後跑 `statement_check.py`（SHUYE07 維護，commit 93b23b1，Boss 只跑不改）比對 Trade History↔Cash Balance；`$sc=4` INCOMPLETE → 主旨加【CASH BALANCE 不完整】、貼輸出、即使 NEW_TRADES=0 也寄；`$sc=2` ERROR → 主旨加【STATEMENT_CHECK 失敗】；步驟 8/9/12 連動；起因 2026-10-22 Cash Balance 漏列 10/21 22:16 SELL |
-| 2026-10-20 | **採集隱形化**：新增步驟 1.5（`Wait-UserIdle`＋`Save-ScreenState`）、步驟 2 記原頁籤、步驟 10 切回原頁籤＋`Restore-ScreenState`（TOS 視窗大小/最小化、Z 順序、前景、游標原樣還原，5/15 秒背景補還原）並移到最後（9→9.5→11→12→10）；失敗時也還原（debug 截圖照存）。模組 `C:\TradeReview\boss_screen_state.ps1` 由 502 端維護（2026-10-21 於 Boss PC 套用） |
-| 2026-10-16 | **推送改三樣**：9.5 只推 `_inbox\`／`verify_shots\`／`BOSS_SKILL_current.md`（trades_all／sync_state 歸 502、不推）；9.5 推送前自動複製 SKILL 到 `BOSS_SKILL_current.md`；檔頭寫明改 SKILL 後要同步 CLAUDE.md 與 BOSS_SKILL_current.md |
+| 2026-10-20 | **採集隱形化**：新增步驟 1.5（`Wait-UserIdle`＋`Save-ScreenState`）、步驟 2 記原頁籤、步驟 10 切回原頁籤＋`Restore-ScreenState`（TOS 視窗大小/最小化、Z 順序、前景、游標原樣還原，5/15 秒背景補還原）並移到最後（9→9.5→11→12→10）；失敗時也還原（debug 截圖照存）。模組 `C:\TradeReview\boss_screen_state.ps1` 由 SHUYE07 端維護（2026-10-21 於 Boss PC 套用） |
+| 2026-10-16 | **推送改三樣**：9.5 只推 `_inbox\`／`verify_shots\`／`BOSS_SKILL_current.md`（trades_all／sync_state 歸 SHUYE07、不推）；9.5 推送前自動複製 SKILL 到 `BOSS_SKILL_current.md`；檔頭寫明改 SKILL 後要同步 CLAUDE.md 與 BOSS_SKILL_current.md |
 | 2026-10-16 | **舊內容校正**：座標改為 build 1993 實測（主頁籤 y≈33、Monitor 262、Charts 557）；新增「Claude 搶前景」坑與 `Activate-TOSWindowVerified`；步驟 4 改為 N≥5 不動；步驟 5 改用 `Open-ExportDialog`／`Confirm-ExportSave`（鍵盤選單、不打檔名再改名）；步驟 9.5 推送清單加 `verify_shots\`、repo 卡 rebase 時不跑 push；步驟 10 改用 `Switch-ToCharts` |
 | 2026-10-16 | 新增 9.0b 驗證截圖本機留存：交易日擷取 Cash Balance＋Order History＋Trade History，存 `logs\` 與 `verify_shots\`；不附信件、不動日期範圍欄位、不放 `_inbox\` |
 | 2026-10-16 | **美股交易日 06:00**：排程改台灣週二～週六 06:00；Windows 工作 `Claude-TOS-Collector-Launch` 05:45 喚醒並開 Claude；新增步驟 0（`us_trading_day.py`，休市日直接結束、不動 TOS） |
