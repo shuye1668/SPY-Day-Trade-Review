@@ -299,7 +299,19 @@ function Restore-ScreenState {
 
     # 3) 前景視窗搶回並驗證（最多 6 次）
     $fg = [IntPtr][int64]$s.foreground.hwnd
-    if ($claudeHw -contains [int64]$fg) { $fg = [IntPtr]::Zero }
+    $fgNote = ''
+    if ($claudeHw -contains [int64]$fg -or $s.foreground.process -eq 'claude') {
+        # 原前景就是 Claude（2026-10-28：使用者執行前正看著 Claude）：Claude 已縮小，
+        # 改把原 Z 順序（最上層在前）中下一個未最小化的非 Claude 視窗設為前景，不再回報 foreground=False
+        $fg = [IntPtr]::Zero
+        foreach ($z in @($s.zorder)) {
+            $h = [IntPtr][int64]$z.hwnd
+            if ([int64]$z.hwnd -ne [int64]$s.foreground.hwnd -and $claudeHw -notcontains [int64]$z.hwnd `
+                    -and [int]$z.showCmd -ne 2 -and [BossWin]::IsWindow($h) -and [BossWin]::IsWindowVisible($h)) {
+                $fg = $h; $fgNote = " -> '$([BossWin]::Title($h))'"; break
+            }
+        }
+    }
     if ([BossWin]::IsWindow($fg)) {
         for ($k = 0; $k -lt 6 -and -not $r.foreground; $k++) { $r.foreground = [BossWin]::ForceForeground($fg); if (-not $r.foreground) { Start-Sleep -Milliseconds 300 } }
     }
@@ -313,6 +325,6 @@ function Restore-ScreenState {
         Start-Process powershell.exe -WindowStyle Hidden -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $cmd) | Out-Null
     }
     $o = [pscustomobject]$r
-    Write-Host ("screen state restored: tos={0} zorder={1} foreground={2} ('{3}') cursor={4} claude_minimized={5}" -f $o.tos, $o.zorder, $o.foreground, $s.foreground.title, $o.cursor, $o.claude)
+    Write-Host ("screen state restored: tos={0} zorder={1} foreground={2} ('{3}'{6}) cursor={4} claude_minimized={5}" -f $o.tos, $o.zorder, $o.foreground, $s.foreground.title, $o.cursor, $o.claude, $fgNote)
     return $o
 }

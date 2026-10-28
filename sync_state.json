@@ -1,8 +1,8 @@
 {
-  "last_trade_date": "2026-10-22",
-  "status": "blocked",
-  "note": "2026-10-23 需人工確認：前日留倉尚未平倉又新增留倉——無核定範本（10/28 匯出含 10/27 當沖1筆+平倉5筆 全部待 10/23 處理後才寫）",
-  "updated_utc": "2026-10-27T22:54:39Z",
+  "last_trade_date": "2026-10-27",
+  "status": "ok",
+  "note": "",
+  "updated_utc": "2026-10-28T02:46:16Z",
   "host": "SHUYE07",
-  "latest_in_trades_all": "2026-10-22"
+  "latest_in_trades_all": "2026-10-27"
 }

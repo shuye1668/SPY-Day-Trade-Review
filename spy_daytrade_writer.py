@@ -7,8 +7,9 @@ spy_daytrade_writer.py — spy_daytrade_engine.py 的 --commit 寫入層（2026-
 處理兩種日子：
   • 標準日：純當日進出、offset 不變。
   • 特例日（2026-10-22 起，使用者 10/19 核定）：引擎警告只有「收盤留倉」及/或「跨日平倉」、
-    每腿合併後 100 股 → 依核定範本寫兩本帳（10/16 留倉、10/19 平倉、9/29 單筆平倉、7/09）。
-    數字全取自引擎；範本沒涵蓋的版面（同日平倉＋新留倉、部分平倉、留倉中又加碼留倉、
+    每腿合併後 100 股 → 依核定範本寫兩本帳（10/16 留倉、10/19 平倉、9/29 單筆平倉、7/09；
+    2026-10-28 加：留倉中又加碼留倉，10/23 樣式）。
+    數字全取自引擎；範本沒涵蓋的版面（同日平倉＋新留倉、部分平倉、
     留倉區塊含配息列、當沖腿與留倉腿交錯）→ 一律不寫、回報人工。
 其餘特例（非100股/BALANCE 對不上/非交易現金/offset 不確定/Cash Balance 不完整）→
 由引擎的 needs_review/FLAG 或 statement_check 攔下，writer 直接 abort，
@@ -359,6 +360,8 @@ def flip_held_rows(ws, session):
 #   平倉日 2026.10.19（CS 2637-2652）：平倉腿無 C（合計=當沖損益）、核驗扣各平倉腿 A；
 #     抬起檔尾留倉區段，貼回時標頭改「0股」、每筆留倉後接「平倉」列（=+A平倉明細，依留倉順序）、
 #     平倉損益/％；單筆時照 9/29 修正後樣式（2615-2619）。
+#   加碼留倉日 2026.10.23（2026-10-28 使用者要求加範本）：前日留倉續抱中又新增留倉 →
+#     抬起檔尾留倉區段，區塊照留倉日寫法；貼回時標頭改合計股數、舊留倉列原值照抄、新留倉接在後面。
 #   累積損益check：當日損益＝當沖損益＋平倉損益（10/16 13.29、10/19 1132.54）。
 
 class Blocked(Exception):
@@ -401,14 +404,37 @@ def plan_special(ws, session):
     hold_start, hold_rows = _detect_tail_hold_section(ws, last_nonempty_row(ws))
 
     if holds:
-        if {id(l["trade"]) for l in carry_out} != {id(t) for t in holds}:
-            raise Blocked("前日留倉尚未平倉又新增留倉——無核定範本")
-        if hold_start is not None:
-            lots, n_close, _ = _hold_section_parts(hold_rows)
-            if len(lots) != n_close:
-                raise Blocked(f"CS 檔尾累積留倉區段仍有 {len(lots) - n_close} 筆未平，"
-                              "但引擎沒有前日留倉——兩本帳不一致")
-        return {"mode": "hold", "holds": holds}
+        hold_ids = {id(t) for t in holds}
+        if not hold_ids <= {id(l["trade"]) for l in carry_out}:
+            raise Blocked("引擎收盤留倉結果不含今日全部留倉腿——兩本帳不一致")
+        prior = sorted((l for l in carry_out if id(l["trade"]) not in hold_ids),
+                       key=lambda l: (l["trade"].edt_date, l["trade"].edt_time))
+        if not prior:
+            if hold_start is not None:
+                lots, n_close, _ = _hold_section_parts(hold_rows)
+                if len(lots) != n_close:
+                    raise Blocked(f"CS 檔尾累積留倉區段仍有 {len(lots) - n_close} 筆未平，"
+                                  "但引擎沒有前日留倉——兩本帳不一致")
+            return {"mode": "hold", "holds": holds}
+        # 加碼留倉日：檔尾留倉區段必須恰好是引擎續抱的前日留倉（全數未平、逐筆對得上）
+        if hold_start is None:
+            raise Blocked("引擎有續抱的前日留倉，但 CS 檔尾沒有累積留倉區段——兩本帳不一致")
+        lots, n_close, others = _hold_section_parts(hold_rows)
+        if n_close or others:
+            raise Blocked("CS 累積留倉區段已有平倉／配息等其他列——無核定範本")
+        if len(lots) != len(prior):
+            raise Blocked(f"CS 累積留倉 {len(lots)} 筆 ≠ 引擎續抱前日留倉 {len(prior)} 筆")
+        for (a, b, c), l in zip(lots, prior):
+            t = l["trade"]
+            if l["qty_rem"] != t.qty or t.qty != 100:
+                raise Blocked(f"續抱留倉 {t.edt_date} {t.edt_time} 剩 {l['qty_rem']}/{t.qty} 股——無核定範本")
+            if (a != f"{t.edt_date.replace('-', '.')} 留倉" or b != f"買 {t.qty}股"
+                    or not isinstance(c, (int, float)) or t.net_cash is None
+                    or abs(c - t.net_cash) > 0.005):
+                raise Blocked(f"CS 留倉列 {a!r} {b!r} {c!r} 對不上引擎續抱的留倉 "
+                              f"{t.edt_date} {t.edt_time} 淨額 {t.net_cash}")
+        return {"mode": "hold", "holds": holds, "hold_start": hold_start, "lots": lots,
+                "prior": [l["trade"] for l in prior]}
 
     if carry_out:
         raise Blocked("部分平倉（收盤仍有前日留倉續抱）——無核定範本")
@@ -432,7 +458,7 @@ def plan_special(ws, session):
 def write_special_block(ws, session, header_B, plan):
     """依 plan 寫特例日區塊＋累積留倉區段。回傳 layout（核驗用的列號）。"""
     dot = session.edt_date.replace("-", ".")
-    if plan["mode"] == "close":
+    if "hold_start" in plan:    # 平倉日／加碼留倉日：抬起檔尾留倉區段，寫完區塊後重寫
         last = last_nonempty_row(ws)
         ws.delete_rows(plan["hold_start"], last - plan["hold_start"] + 1)
         while last_nonempty_row(ws) < ws.max_row:
@@ -459,7 +485,8 @@ def write_special_block(ws, session, header_B, plan):
     ws.cell(chk, 3, f"=+B{dN}-B{hr}" + "".join(f"-A{r}" for r in special_rows))
     ws.cell(chk, 3).number_format = FMT_NUM
     lay = {"hr": hr, "d0": d0, "dN": dN, "tot": tot, "chk": chk, "row_of": row_of,
-           "mode": plan["mode"], "pnl_row": None, "day_pnl_row": None}
+           "mode": plan["mode"], "pnl_row": None, "day_pnl_row": None,
+           "lifted": "hold_start" in plan}
     end = chk
     day_rows = [row_of[id(t)] for t in legs if leg_kind(t) == "day"]
     if day_rows:
@@ -480,12 +507,17 @@ def write_special_block(ws, session, header_B, plan):
     h0 = end + 2  # 1 空行後接累積留倉
     if plan["mode"] == "hold":
         holds = plan["holds"]
-        ws.cell(h0, 1, f"累積留倉   {sum(t.qty for t in holds)}股")
+        lots, prior = plan.get("lots", []), plan.get("prior", [])
+        ws.cell(h0, 1, f"累積留倉   {sum(t.qty for t in prior + holds)}股")
+        for i, (a, b, c) in enumerate(lots):     # 加碼留倉日：續抱的舊留倉列原值照抄
+            ws.cell(h0 + 1 + i, 1, a); ws.cell(h0 + 1 + i, 2, b); ws.cell(h0 + 1 + i, 3, c)
         for i, t in enumerate(holds):
-            r = h0 + 1 + i
+            r = h0 + 1 + len(lots) + i
             ws.cell(r, 1, f"{dot} 留倉"); ws.cell(r, 2, f"買 {t.qty}股"); ws.cell(r, 3, t.net_cash)
-        lay["lot_rows"] = list(range(h0 + 1, h0 + 1 + len(holds)))
-        lay["hold_end"] = h0 + len(holds)
+        n = len(lots) + len(holds)
+        lay["lot_rows"] = list(range(h0 + 1, h0 + 1 + n))
+        lay["lot_expect"] = [t.net_cash for t in prior + holds]
+        lay["hold_end"] = h0 + n
     else:
         lots, by_lot = plan["lots"], plan["by_lot"]
         ws.cell(h0, 1, "累積留倉   0股")
@@ -589,10 +621,10 @@ def verify_special(ws, lay, session, offset, check_hold=True):
         if not check_hold:
             pass
         elif lay["mode"] == "hold":
-            holds = [t for t in legs if leg_kind(t) == "hold"]
+            want = lay["lot_expect"]
             got = [_cell_num(ws, f"C{r}") for r in lay["lot_rows"]]
-            if len(got) != len(holds) or any(abs(g - t.net_cash) > 0.005 for g, t in zip(got, holds)):
-                errs.append(f"累積留倉列 {got} ≠ 引擎留倉淨額 {[t.net_cash for t in holds]}")
+            if len(got) != len(want) or any(abs(g - w) > 0.005 for g, w in zip(got, want)):
+                errs.append(f"累積留倉列 {got} ≠ 引擎留倉淨額 {want}")
         else:
             pr = round(_cell_num(ws, f"C{lay['pnl_row']}"), 2)
             if abs(pr - close_pnl) > 0.01:
@@ -659,9 +691,12 @@ def offset_note(session, offset, lay):
     parts = [f"當沖{len(day)}組{sum(t.pnl for t in day):+.2f}" if day else "無當沖腿"]
     if lay["mode"] == "hold":
         holds = [t for t in legs if leg_kind(t) == "hold"]
-        kind = "留倉建立日"
+        kind = "加碼留倉日" if len(lay["lot_expect"]) > len(holds) else "留倉建立日"
         parts.append(f"新增留倉 {sum(t.qty for t in holds)}股("
                      + "/".join(f"{t.price}" for t in holds) + ")")
+        if kind == "加碼留倉日":
+            parts.append(f"續抱前日留倉 {len(lay['lot_expect']) - len(holds)} 筆，累積留倉 "
+                         f"{len(lay['lot_expect']) * 100}股")
     else:
         closes = sorted((t for t in legs if leg_kind(t) == "close"), key=lambda t: (t.pair_date, t.pair_time))
         kind = "平倉日"
@@ -722,7 +757,18 @@ def commit_trades_only(sessions, trades_path=TRADES_PATH_DEFAULT):
     ⚠️ 安全閘門一條都沒放寬：gate() 檢查的 open/close 餘額明確性、每筆
     needs_review、以及 BALANCE 對不上／留倉／非交易現金，全都是 session
     層級的判斷，不依賴 CS。§1b 的逐列餘額重建也在引擎端就做完了。
+
+    已在 trades_all 的交易日先排除再過 gate（2026-10-28）：Boss 每天匯出 7 天，
+    SHUYE07 已依 §3b 寫好的留倉／平倉日若仍拿去過舊 gate，會連續一週整份擋下。
     """
+    ws_now = openpyxl.load_workbook(trades_path).active
+    done = {s.edt_date for s in sessions if day_already_in_trades(ws_now, s.edt_date)}
+    for d in sorted(done):
+        print(f"— {d} 已存在於 trades_all（冪等跳過，不重寫）")
+    sessions = [s for s in sessions if s.edt_date not in done]
+    if not sessions:
+        print("（無新資料可寫——所有 session 皆已存在，冪等跳過）")
+        return True
     blocked = {}
     for s in sessions:
         r = gate(s)
@@ -876,7 +922,7 @@ def commit(sessions, cs_path=CS_PATH_DEFAULT, trades_path=TRADES_PATH_DEFAULT,
             wb_chk = openpyxl.load_workbook(cs_path)
             tr_chk = openpyxl.load_workbook(trades_path).active
             for i, (s, lay) in enumerate(specials):
-                moved = lay["mode"] == "hold" and any(l["mode"] == "close" for _, l in specials[i + 1:])
+                moved = lay["mode"] == "hold" and any(l["lifted"] for _, l in specials[i + 1:])
                 errs, _ = verify_special(wb_chk[SHEET_DETAIL], lay, s, offset, check_hold=not moved)
                 errs += verify_trades_special(tr_chk, s)
                 if errs:
