@@ -47,8 +47,11 @@ if ($Owner -eq 'p502') {
 }
 
 try {
+    # checkout HEAD --（2026-10-28 改，原為 checkout --）：stash pop 衝突留下的 UU（unmerged）檔
+    # 用 checkout -- 會被 git 拒絕（path is unmerged），pull 就天天 exit 2；HEAD 版連 index 一起還原。
+    # Boss 10/21、10/28 兩次都卡在 sync_state.json UU，靠人工 checkout HEAD 解。
     foreach ($p in $foreign) {
-        if (Test-Path $p) { Try-Git checkout -- $p | Out-Null }
+        if (Test-Path $p) { Try-Git checkout HEAD -- $p | Out-Null }
     }
 
     # 還有殘留改動就停 —— 寧可停下來讓人看到，也不要 pull 失敗卻回報成功。
