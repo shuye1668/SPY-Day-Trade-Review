@@ -1,8 +1,8 @@
 {
   "last_trade_date": "2026-10-27",
   "status": "ok",
-  "note": "",
-  "updated_utc": "2026-10-28T02:46:16Z",
+  "note": "2026-10-28 無新成交（10/29 CSV 最新 session 仍為 10/27，已寫入）",
+  "updated_utc": "2026-10-28T22:54:23Z",
   "host": "SHUYE07",
   "latest_in_trades_all": "2026-10-27"
 }
