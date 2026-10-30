@@ -1,8 +1,8 @@
 {
   "last_trade_date": "2026-10-27",
-  "status": "ok",
-  "note": "2026-10-28 無新成交（10/29 CSV 最新 session 仍為 10/27，已寫入）",
-  "updated_utc": "2026-10-28T22:54:23Z",
+  "status": "blocked",
+  "note": "CASH_BALANCE_INCOMPLETE 2026-10-29 07:50 補跑仍不完整，需人工補帳（Boss 07:30 未重新推送，origin 最後 06:13；缺 6 筆 10/22 23:32～10/23 03:05 BUY TO OPEN 共 400 股）",
+  "updated_utc": "2026-10-30T00:22:01Z",
   "host": "SHUYE07",
   "latest_in_trades_all": "2026-10-27"
 }
