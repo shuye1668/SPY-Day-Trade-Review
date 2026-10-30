@@ -830,6 +830,20 @@ def commit(sessions, cs_path=CS_PATH_DEFAULT, trades_path=TRADES_PATH_DEFAULT,
            dry_report=True, text=None):
     st = load_offset()
     offset = float(st["offset"])
+    # 兩本帳都已有的交易日先排除再過 gate（2026-10-30，同 commit_trades_only 10/28 的處理）：
+    # Boss 匯出 7 天，Trade History 還會多帶對帳期間前的開倉腿；已寫好的平倉日在這份檔裡
+    # 配不到原留倉，會被引擎誤判成空單留倉，整份擋下（10/30 檔的 10/27）。只有一本有的日子照舊過 gate。
+    ws_cs_now = openpyxl.load_workbook(cs_path)[SHEET_DETAIL]
+    ws_tr_now = openpyxl.load_workbook(trades_path).active
+    done = {s.edt_date for s in sessions
+            if day_already_written(ws_cs_now, s.edt_date.replace("-", "."))
+            and day_already_in_trades(ws_tr_now, s.edt_date)}
+    for d in sorted(done):
+        print(f"— {d} 已存在於 CS 與 trades_all（冪等跳過，不重寫）")
+    sessions = [s for s in sessions if s.edt_date not in done]
+    if not sessions:
+        print("（無新資料可寫——所有 session 皆已存在，冪等跳過）")
+        return True
     # gate 全部 session（特例日：只容許多單收盤留倉／跨日平倉）
     blocked = {}
     for s in sessions:
@@ -838,7 +852,7 @@ def commit(sessions, cs_path=CS_PATH_DEFAULT, trades_path=TRADES_PATH_DEFAULT,
             blocked[s.edt_date] = r
     # 特例日必過 Cash Balance 完整性檢查：漏列一筆賣出，引擎會把當沖誤判成留倉（2026-10-22 事件）
     if not blocked and any(is_special(s) for s in sessions):
-        ok, lines = statement_check(text) if text else (False, ["沒有對帳單原文可檢查"])
+        ok, lines = statement_check(text, trades_path) if text else (False, ["沒有對帳單原文可檢查"])
         if not ok:
             blocked["Cash Balance"] = ["CASH_BALANCE_INCOMPLETE：特例日不自動寫入"] + lines
     if blocked:
