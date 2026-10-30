@@ -56,7 +56,7 @@ def main():
     ap.add_argument("--date", required=True)
     a = ap.parse_args()
     spec = json.loads(subprocess.run(
-        [sys.executable, os.path.join(HERE, "julia_block_spec.py"), a.csv_path, "--date", a.date],
+        [sys.executable, os.path.join(HERE, "julia_block_spec.py"), a.csv_path, "--date", a.date, "--flag"],
         capture_output=True, text=True, encoding="utf-8", check=True).stdout)
     if not spec["ok"]:
         print(json.dumps({"error": spec["reasons"]}, ensure_ascii=False)); sys.exit(3)
@@ -66,6 +66,11 @@ def main():
     html = [f'<div style="font-family:PMingLiU,\'新細明體\',serif;font-size:16px">']
     html.append("".join(f"<div>{l}</div>" for l in lines))
     text = list(lines)
+    flags = spec.get("flags") or []
+    if flags:   # 2026-10-30：不擋，照寄但標明待修正
+        warn = "⚠️待修正：" + "；".join(flags)
+        html.append(f'<div style="color:#ff0000;font-weight:bold;margin:6px 0">{warn}</div>')
+        text.append(warn)
 
     exits = [l for l in legs if l["kind"] == "day" and l["pnl"] is not None]
     if exits:
@@ -109,7 +114,7 @@ def main():
     det.append("</table>")
     html.append("".join(det))
     html.append("</div>")
-    print(json.dumps({"subject": lines[0] if lines else f"{dot} SPY", "body": "\n".join(text),
+    print(json.dumps({"subject": ("【待修正】" if flags else "") + (lines[0] if lines else f"{dot} SPY"), "body": "\n".join(text),
                       "html": "".join(html)}, ensure_ascii=False))
 
 

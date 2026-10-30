@@ -23,18 +23,21 @@ SHUYE07 引擎則把當天的 BOT 誤判成留倉。
 （那一天根本還沒入帳，不能靠這份檔放行）。
 
 用法：
-  python statement_check.py <csv>
+  python statement_check.py <csv> [--repair <out.csv>]
 結束碼：0 = 完整（STATEMENT_CHECK=OK）
         4 = 不完整（STATEMENT_CHECK=INCOMPLETE，stdout 列出缺漏，可原樣貼進信件正文）
+        3 = 不完整但已自動補列寫到 out.csv（--repair，2026-10-30 起排程用；後續步驟改用 out.csv 並標警示）
         2 = 解析失敗（STATEMENT_CHECK=ERROR）
 """
 
+import csv
+import io
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from spy_daytrade_engine import (parse_statement, parse_total_cash, parse_trade_history,  # noqa: E402
-                                  _to_edt)
+                                  _to_edt, _parse_cst_dt)
 
 PRICE_TOL = 0.00005
 TIME_TOL_S = 10
@@ -143,14 +146,151 @@ def check(text, trades_path=TRADES_PATH_DEFAULT):
     return ok, lines
 
 
+FEE_RATE_EST = 0.0000206   # 賣方 SEC+TAF 約 1.58/76,900；Total Cash 推不出時才用
+
+
+def _missing_fills(text, trades_path):
+    """check() 的 A 段缺漏清單（不含已在 trades_all 的期間外成交）。"""
+    fills = parse_statement(text)
+    history = parse_trade_history(text)
+    start = min((f.cst_dt for f in fills if f.cst_dt is not None), default=None)
+    keys = _trades_all_keys(trades_path) if start is not None else None
+    if keys is not None:
+        history = [h for h in history if not (h[0] < start and
+                   (_to_edt(h[0]).strftime("%Y-%m-%d"), round(h[4], 4)) in keys)]
+    trd = [f for f in fills if f.typ == "TRD" and f.side]
+    used, missing = set(), []
+    for h in history:
+        want = "BOT" if h[1] == "BUY" else "SOLD"
+        hit = next((k for k, f in enumerate(trd) if k not in used and f.side == want
+                    and abs(f.qty) == abs(h[2]) and abs(f.price - h[4]) < PRICE_TOL
+                    and abs((f.cst_dt - h[0]).total_seconds()) <= TIME_TOL_S), None)
+        if hit is None:
+            missing.append(h)
+        else:
+            used.add(hit)
+    return fills, missing
+
+
+def repair(text, trades_path=TRADES_PATH_DEFAULT):
+    """把 Trade History 有、Cash Balance 漏列的成交補進 Cash Balance（2026-10-30，取代人工補列）。
+
+    每筆補一列 TRD（REF=AUTO…，同時間同價同方向的部分成交共用 REF 讓引擎合併）：
+    AMOUNT=毛額；賣方費用＝(Total Cash − 最後 BALANCE − Σ缺漏毛額) 依毛額比例分攤，
+    推不出或不合理時用 FEE_RATE_EST 估；插在時間序位置，其後到下一個 BAL 之前的 BALANCE 一併加上。
+    回傳 (new_text, lines)；沒有缺漏回傳 (None, lines)。"""
+    fills, missing = _missing_fills(text, trades_path)
+    if not missing:
+        return None, ["無缺漏，不需補列"]
+    total_cash = parse_total_cash(text)
+    bal_rows = [f for f in fills if f.balance is not None]
+    gross = [round(-q * p, 2) for _, _, q, _, p in missing]          # BUY +100 → 負；SELL -100 → 正
+    sell_gross = sum(g for g in gross if g > 0)
+    fee_total = None
+    if total_cash is not None and bal_rows and sell_gross:
+        f = round(total_cash - bal_rows[-1].balance - sum(gross), 2)
+        if -sell_gross * 0.0002 <= f <= 0:
+            fee_total = f
+    fees = []
+    for g in gross:
+        if g <= 0:
+            fees.append(0.0)
+        elif fee_total is not None:
+            fees.append(round(fee_total * g / sell_gross, 2))
+        else:
+            fees.append(-round(g * FEE_RATE_EST, 2))
+    if fee_total is not None and sell_gross:
+        k = max(i for i, g in enumerate(gross) if g > 0)
+        fees[k] = round(fees[k] + fee_total - sum(fees), 2)          # 分攤尾差歸最後一筆賣出
+
+    lines_in = text.splitlines()
+    hdr = next(i for i, ln in enumerate(lines_in) if ln.startswith("DATE,TIME,TYPE") or
+               ("Exec Time" in ln and "Balance" in ln))
+    end = hdr + 1
+    while end < len(lines_in) and lines_in[end][:1].isdigit():
+        end += 1
+    rows = []
+    for ln in lines_in[hdr + 1:end]:
+        c = next(csv.reader(io.StringIO(ln)))
+        rows.append({"c": c, "dt": _parse_cst_dt(c[0], c[1]), "typ": c[2].strip(), "auto": False})
+    refs = {}
+    for (h_dt, h_side, h_qty, _, h_px), g, fee in zip(missing, gross, fees):
+        key = (h_side, round(h_px, 4), h_dt.strftime("%Y%m%d%H%M"))
+        ref = refs.setdefault(key, f"AUTO{h_dt:%Y%m%d%H%M%S}")
+        side = "BOT" if h_side == "BUY" else "SOLD"
+        c = [f"{h_dt:%m/%d/%y}", f"{h_dt:%H:%M:%S}", "TRD", f'="{ref}"',
+             f"{side} {h_qty:+d} SPY @{h_px:g}", f"{fee:.2f}" if fee else "", "", f"{g:,.2f}", ""]
+        pos = len(rows)
+        for i, r in enumerate(rows):
+            if r["dt"] > h_dt:
+                pos = i
+                break
+        rows.insert(pos, {"c": c, "dt": h_dt, "typ": "TRD", "auto": True, "delta": round(g + fee, 2)})
+    bal = None
+    shift = 0.0
+    for r in rows:
+        c = r["c"]
+        if r["typ"] == "BAL":
+            shift = 0.0
+            bal = _num_csv(c[8])
+            continue
+        if r["auto"]:
+            shift = round(shift + r["delta"], 2)
+            prev = bal if bal is not None else 0.0
+            bal = round(prev + r["delta"], 2)
+            c[8] = f"{bal:,.2f}"
+        else:
+            v = _num_csv(c[8])
+            if v is not None:
+                bal = round(v + shift, 2)
+                c[8] = f"{bal:,.2f}"
+    out_rows = []
+    for r in rows:
+        buf = io.StringIO()
+        csv.writer(buf, lineterminator="").writerow(r["c"])
+        out_rows.append(buf.getvalue().replace('"=""', '="').replace('""",', '",'))
+    new_text = "\n".join(lines_in[:hdr + 1] + out_rows + lines_in[end:])
+    info = [f"已自動補列 {len(missing)} 筆（REF AUTO…；費用 "
+            + ("由 Total Cash 推算" if fee_total is not None else "依費率估計") + "）："]
+    for (h_dt, h_side, h_qty, h_pe, h_px), g, fee in zip(missing, gross, fees):
+        info.append(f"   + {h_dt:%m/%d/%y %H:%M:%S}（台北）{h_side} {h_qty:+d} SPY @{h_px} 毛額 {g:+,.2f} 費用 {fee:+.2f}")
+    return new_text, info
+
+
+def _num_csv(s):
+    s = (s or "").strip().replace(",", "").replace("$", "")
+    if not s:
+        return None
+    neg = s.startswith("(") and s.endswith(")")
+    v = float(s.strip("()"))
+    return -v if neg else v
+
+
 def main():
-    if len(sys.argv) != 2:
+    args = sys.argv[1:]
+    out = None
+    if "--repair" in args:
+        i = args.index("--repair")
+        out = args[i + 1] if i + 1 < len(args) else None
+        args = args[:i] + args[i + 2:]
+    if len(args) != 1 or ("--repair" in sys.argv and not out):
         print(__doc__)
         sys.exit(2)
     try:
-        with open(sys.argv[1], encoding="utf-8-sig") as fh:
+        with open(args[0], encoding="utf-8-sig") as fh:
             text = fh.read()
         ok, lines = check(text)
+        if not ok and out:
+            new_text, info = repair(text)
+            if new_text is not None:
+                ok2, lines2 = check(new_text)
+                with open(out, "w", encoding="utf-8") as fh:
+                    fh.write(new_text + "\n")
+                print("STATEMENT_CHECK=REPAIRED" if ok2 else "STATEMENT_CHECK=REPAIRED_STILL_INCOMPLETE")
+                for ln in lines + info + ["補列後重檢："] + lines2:
+                    print(ln)
+                print(f"→ 已寫 {out}，後續步驟改用這份（writer/Julia 會標 ⚠️待修正）")
+                sys.exit(3)
     except Exception as e:  # noqa: BLE001
         print(f"STATEMENT_CHECK=ERROR {type(e).__name__}: {e}")
         sys.exit(2)

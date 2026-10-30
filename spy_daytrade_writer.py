@@ -17,6 +17,12 @@ spy_daytrade_writer.py — spy_daytrade_engine.py 的 --commit 寫入層（2026-
 
 安全：§3 寫前備份、§5 檢查 ~$ 鎖檔、§4 寫後全核驗、失敗還原備份。
 
+--flag（2026-10-30 使用者要求「不要擋，發現錯誤警示就好，工作日再來修正」，排程一律帶）：
+上面會擋下的情況改成「照寫＋警示」——範本外／gate 擋下的日子寫成通用區塊（全腿＋非交易現金列、
+合計、核驗＝B末−B頭，標頭 D 欄紅字「⚠️待修正：原因」）；特例日寫後核驗不過也保留、轉警示。
+每筆警示記進 auto_flags.json（工作日人工修正後把 fixed 設 true），結束碼 3＝已寫入但有警示。
+不帶 --flag 時行為與以前完全相同。
+
 offset 模型（CLAUDE.md §二）：Day Header B = 券商開盤餘額 + offset。
 offset 是常數（2026-08-05 起為 0）。特例日寫後頭尾雙錨照驗，offset 數值不動，
 只在 offset_state.json 的 note 前面補一段當日註記；offset 真的跳動 → 核驗不過 → 還原、轉人工。
@@ -29,6 +35,7 @@ import shutil
 from datetime import datetime
 
 import openpyxl
+from openpyxl.styles import Font
 
 from spy_daytrade_engine import (
     parse_statement, group_sessions, process_all, FLAG,
@@ -40,6 +47,7 @@ _BASE = os.path.dirname(os.path.abspath(__file__))
 CS_PATH_DEFAULT = os.path.join(_BASE, "CS交易紀錄.xlsx")
 TRADES_PATH_DEFAULT = os.path.join(_BASE, "trades_all.xlsx")
 OFFSET_STATE = os.path.join(_BASE, "offset_state.json")
+FLAGS_PATH = os.path.join(_BASE, "auto_flags.json")
 SHEET_DETAIL = "個別識別法"
 
 FMT_NUM = r"0.00_);[Red]\(0.00\)"
@@ -261,6 +269,59 @@ def write_cs_block(ws, session, header_B):
     pct = pnl + 1
     ws.cell(pct, 2, "當日損益 %"); ws.cell(pct, 3, f"=C{pnl}/ABS(C{buy})"); ws.cell(pct, 3).number_format = FMT_PCT
     return hr, d0, dN
+
+
+def write_flag_block(ws, session, header_B, reasons):
+    """--flag 通用區塊：範本外／gate 擋下的日子照寫，留給工作日人工修正。
+    明細＝全部成交腿＋非交易現金列（依時間），A 淨額、B 餘額鏈、C 有損益才填；
+    核驗＝B末−B頭（與合計不等＝要修的地方）；標頭 D 欄紅字列出原因。回傳 (hr, day_pnl)。"""
+    dot = session.edt_date.replace("-", ".")
+    hr = last_nonempty_row(ws) + 3
+    ws.cell(hr, 1, dot); ws.cell(hr, 2, round(header_B, 2)); ws.cell(hr, 3, "損益")
+    flag = ws.cell(hr, 4, "⚠️待修正：" + "；".join(reasons))
+    flag.font = Font(color="FF0000", bold=True)
+    rows = [(t.cst_dt, t.net_cash, t.pnl, "") for t in session.trades]
+    rows += [(f.cst_dt, f.net_cash, None, f"{f.typ} {f.desc[:40]}") for f in getattr(session, "cash", [])]
+    rows.sort(key=lambda x: (x[0] is None, x[0]))
+    d0 = hr + 1
+    for i, (_, net, pnl, label) in enumerate(rows):
+        r = d0 + i
+        ws.cell(r, 1, net)
+        ws.cell(r, 2, f"=+B{hr}+A{r}" if i == 0 else f"=+B{r-1}+A{r}")
+        if pnl is not None:
+            ws.cell(r, 3, pnl)
+        if label:
+            ws.cell(r, 4, label)
+    dN = d0 + len(rows) - 1
+    tot = dN + 1
+    ws.cell(tot, 2, "合計 "); ws.cell(tot, 3, f"=SUM(C{d0}:C{dN})"); ws.cell(tot, 3).number_format = FMT_NUM
+    ws.cell(tot + 1, 2, "核驗"); ws.cell(tot + 1, 3, f"=+B{dN}-B{hr}"); ws.cell(tot + 1, 3).number_format = FMT_NUM
+    day_pnl = round(sum(t.pnl for t in session.trades if t.pnl is not None), 2)
+    return hr, day_pnl
+
+
+def record_flags(entries):
+    """auto_flags.json：[{date, reasons, cs_row, at, fixed}]。同日已有未修正的記錄就合併原因。"""
+    try:
+        with open(FLAGS_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        data = []
+    for e in entries:
+        old = next((x for x in data if x["date"] == e["date"] and not x.get("fixed")), None)
+        if old:
+            old["reasons"] += [r for r in e["reasons"] if r not in old["reasons"]]
+            old["cs_row"] = e.get("cs_row") or old.get("cs_row")
+        else:
+            data.append({**e, "at": datetime.now().strftime("%Y-%m-%d %H:%M"), "fixed": False})
+    with open(FLAGS_PATH, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=False, indent=1)
+
+
+def auto_repair_reasons(session):
+    """statement_check --repair 補進來的列（REF 以 AUTO 開頭）→ 警示原因。"""
+    n = sum(1 for f in session.fills if str(f.ref).startswith("AUTO"))
+    return [f"Cash Balance 自動補列 {n} 筆（Trade History 有、Cash Balance 漏列；費用由 Total Cash 推算）"] if n else []
 
 
 _REF_RE = re.compile(r"(?<![A-Za-z$])([A-Z]{1,3})(\d+)(?!\d)")
@@ -827,7 +888,8 @@ def commit_trades_only(sessions, trades_path=TRADES_PATH_DEFAULT):
 
 
 def commit(sessions, cs_path=CS_PATH_DEFAULT, trades_path=TRADES_PATH_DEFAULT,
-           dry_report=True, text=None):
+           dry_report=True, text=None, flag=False):
+    """回傳 True（寫完／冪等）、False（gate 擋下，未寫）、"flagged"（--flag：已寫但有警示）。"""
     st = load_offset()
     offset = float(st["offset"])
     # 兩本帳都已有的交易日先排除再過 gate（2026-10-30，同 commit_trades_only 10/28 的處理）：
@@ -855,6 +917,19 @@ def commit(sessions, cs_path=CS_PATH_DEFAULT, trades_path=TRADES_PATH_DEFAULT,
         ok, lines = statement_check(text, trades_path) if text else (False, ["沒有對帳單原文可檢查"])
         if not ok:
             blocked["Cash Balance"] = ["CASH_BALANCE_INCOMPLETE：特例日不自動寫入"] + lines
+    for s in sessions:
+        r = auto_repair_reasons(s)
+        if r:
+            blocked.setdefault(s.edt_date, []).extend(r)
+    flagged = {}
+    if blocked and flag:
+        cb = blocked.pop("Cash Balance", None)
+        flagged = {d: list(r) for d, r in blocked.items()}
+        if cb:
+            for s in sessions:
+                if is_special(s):
+                    flagged.setdefault(s.edt_date, []).append(cb[0])
+        blocked = {}
     if blocked:
         print("🔴 以下 session 需人工確認，全部不寫入：")
         for d, rs in blocked.items():
@@ -877,6 +952,7 @@ def commit(sessions, cs_path=CS_PATH_DEFAULT, trades_path=TRADES_PATH_DEFAULT,
 
         written = 0
         specials = []   # (session, layout)：存檔後重驗＋offset 註記用
+        flag_entries = []   # --flag：寫入但要工作日修正的日子
         for s in sessions:
             cur = s.edt_date
             dot = s.edt_date.replace("-", ".")
@@ -884,15 +960,54 @@ def commit(sessions, cs_path=CS_PATH_DEFAULT, trades_path=TRADES_PATH_DEFAULT,
                 print(f"— {s.edt_date} 已存在於 CS（冪等跳過，不重寫）")
                 continue
             backlink_pairs(s)
+            reasons = flagged.get(s.edt_date)
+            plan = None
+            if reasons is None and is_special(s) and flag:
+                try:
+                    plan = plan_special(ws, s)
+                except Blocked as e:
+                    reasons = [str(e)]
+            if reasons is not None:
+                # --flag 通用區塊：檔尾累積留倉區段照標準日做法抬起、寫完貼回
+                if s.open_bal is None:
+                    raise RuntimeError(f"{s.edt_date} 開盤餘額不明，連通用區塊都無法寫")
+                header_B = round(s.open_bal + offset, 2)
+                last = last_nonempty_row(ws)
+                hold_start, hold_rows = _detect_tail_hold_section(ws, last)
+                if hold_start is not None:
+                    ws.delete_rows(hold_start, last - hold_start + 1)
+                    while last_nonempty_row(ws) < ws.max_row:
+                        ws.delete_rows(ws.max_row, 1)
+                hr, day_pnl = write_flag_block(ws, s, header_B, reasons)
+                if hold_rows:
+                    append_hold_section(ws, hold_rows, hold_start)
+                write_trades_all(tr, s)
+                try:
+                    flip_held_rows(tr, s)
+                except Blocked as e:
+                    reasons.append(str(e))
+                write_cumulative(wb_cs, s, day_pnl)
+                flag_entries.append({"date": s.edt_date, "reasons": reasons, "cs_row": hr})
+                written += 1
+                print(f"⚠️ {s.edt_date} 通用區塊寫入（待修正）：CS header row {hr}, 當日損益 {day_pnl:+.2f}")
+                continue
             header_B = round(s.open_bal + offset, 2)
             if is_special(s):
-                plan = plan_special(ws, s)
+                plan = plan or plan_special(ws, s)
                 lay = write_special_block(ws, s, header_B, plan)
                 errs, day_pnl = verify_special(ws, lay, s, offset)
-                if errs:
+                if errs and not flag:
                     raise RuntimeError(f"{s.edt_date} 核驗失敗：{errs}")
                 write_trades_all(tr, s)
-                flip_held_rows(tr, s)
+                try:
+                    flip_held_rows(tr, s)
+                except Blocked as e:
+                    if not flag:
+                        raise
+                    errs = list(errs) + [str(e)]
+                if errs:
+                    flag_entries.append({"date": s.edt_date, "reasons": [f"特例日核驗：{x}" for x in errs],
+                                         "cs_row": lay["hr"]})
                 write_cumulative(wb_cs, s, day_pnl)
                 specials.append((s, lay))
                 written += 1
@@ -914,8 +1029,10 @@ def commit(sessions, cs_path=CS_PATH_DEFAULT, trades_path=TRADES_PATH_DEFAULT,
 
             hr, d0, dN = write_cs_block(ws, s, header_B)
             errs, day_pnl = verify_cs(ws, hr, d0, dN, s, offset)
-            if errs:
+            if errs and not flag:
                 raise RuntimeError(f"{s.edt_date} 核驗失敗：{errs}")
+            if errs:
+                flag_entries.append({"date": s.edt_date, "reasons": [f"核驗：{x}" for x in errs], "cs_row": hr})
 
             if hold_rows:
                 append_hold_section(ws, hold_rows, hold_start)
@@ -939,14 +1056,24 @@ def commit(sessions, cs_path=CS_PATH_DEFAULT, trades_path=TRADES_PATH_DEFAULT,
                 moved = lay["mode"] == "hold" and any(l["lifted"] for _, l in specials[i + 1:])
                 errs, _ = verify_special(wb_chk[SHEET_DETAIL], lay, s, offset, check_hold=not moved)
                 errs += verify_trades_special(tr_chk, s)
-                if errs:
+                if errs and not flag:
                     raise RuntimeError(f"{s.edt_date} 存檔後核驗失敗：{errs}")
+                if errs:
+                    flag_entries.append({"date": s.edt_date, "reasons": [f"存檔後核驗：{x}" for x in errs],
+                                         "cs_row": lay["hr"]})
             b3 = OFFSET_STATE[:-5] + f"_backup_{_today()}.json"
             shutil.copy2(OFFSET_STATE, b3)
             for s, lay in specials:
                 st["note"] = offset_note(s, offset, lay) + " || 前註：" + st.get("note", "")
                 st["as_of"] = s.edt_date
             save_offset(st)
+        if flag_entries:
+            record_flags(flag_entries)
+            for e in flag_entries:
+                print(f"FLAGGED={e['date']}｜" + "；".join(e["reasons"]))
+            print(f"🟡 {written} 個交易日已寫入，其中 {len({e['date'] for e in flag_entries})} 天有警示"
+                  f"（記在 auto_flags.json，工作日修正）")
+            return "flagged"
         print(f"✅ {written} 個交易日寫入完成並通過 §4 核驗")
         return True
     except Blocked as e:
@@ -976,6 +1103,8 @@ def main():
     ap.add_argument("--cs", default=CS_PATH_DEFAULT)
     ap.add_argument("--trades", default=TRADES_PATH_DEFAULT)
     ap.add_argument("--commit", action="store_true")
+    ap.add_argument("--flag", action="store_true",
+                    help="不擋：範本外／核驗不過照寫通用區塊並記 auto_flags.json（結束碼 3）")
     ap.add_argument("--trades-only", action="store_true",
                     help="只寫 trades_all，不碰 CS交易紀錄／offset_state（Boss PC 第一段用）")
     a = ap.parse_args()
@@ -997,8 +1126,8 @@ def main():
             if a.trades_only:
                 ok = commit_trades_only(sessions, a.trades)
             else:
-                ok = commit(sessions, a.cs, a.trades, text=text)
-        sys.exit(0 if ok else 2)   # 被 gate 擋下時回非 0，讓呼叫端腳本知道別繼續
+                ok = commit(sessions, a.cs, a.trades, text=text, flag=a.flag)
+        sys.exit(3 if ok == "flagged" else 0 if ok else 2)   # 被 gate 擋下時回非 0，讓呼叫端腳本知道別繼續
     else:
         mode = "trades-only" if a.trades_only else "full"
         print(f"[DRY-RUN] writer 未寫入（{mode}）。session:", [s.edt_date for s in sessions])

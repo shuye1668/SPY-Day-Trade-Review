@@ -3515,6 +3515,7 @@ function renderSyncBadge(s,c,l){
   const ageD=(Date.now()-Date.parse(s.updated_utc))/86400000;
   let color="#6B7280",txt=`同步 ${s.host||"?"}`;
   if(s.status==="blocked"){color="#E0A800";txt+=" ⚠需人工確認";}
+  else if(s.status==="flagged"){color="#E0A800";txt+=" ⚠已入帳待修正";}
   else if(s.status==="failed"){color="#FF4444";txt+=" ✕採集失敗";}
   // 這顆只講「採集腳本多久沒跑」。帳本多舊由 ledgerbadge 負責 —— 兩條鏈分開報，
   // 否則採集腳本一停就把「帳本其實是最新的」這個事實蓋掉（2026-08~09 就是這樣）。

@@ -47,8 +47,8 @@ def latest_date_in_trades():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--date", help="本次處理的交易日 YYYY-MM-DD（省略則取 trades_all 最新日）")
-    ap.add_argument("--status", default="ok", choices=["ok", "blocked", "failed"],
-                    help="ok=已寫入；blocked=被 gate 擋下需人工；failed=流程失敗")
+    ap.add_argument("--status", default="ok", choices=["ok", "flagged", "blocked", "failed"],
+                    help="ok=已寫入；flagged=已寫入但有警示待修正（2026-10-30）；blocked=被 gate 擋下需人工；failed=流程失敗")
     ap.add_argument("--note", default="", help="狀態說明，會顯示在 App 上")
     a = ap.parse_args()
     try:

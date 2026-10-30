@@ -19,17 +19,22 @@ param(
     [Parameter(Mandatory = $true)][string]$Csv,
     [Parameter(Mandatory = $true)][string]$Date,
     [string]$Target = 'D:\fileserver\書業(新)\Julia\0更新捷徑\SPY INTRADAY\CS交易紀錄2026年起.xlsx',
-    [switch]$DryRun
+    [switch]$DryRun,
+    # 2026-10-30「不要擋，發現錯誤警示就好」：引擎原因／核驗不過都照寫，區塊下方加紅字「⚠️待修正」列，結束碼 9
+    [switch]$Flag
 )
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $py = 'C:\Users\server\AppData\Local\Python\pythoncore-3.14-64\python.exe'
 
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
-$json = (& $py (Join-Path $here 'julia_block_spec.py') $Csv --date $Date) | Out-String
+$specArgs = @($Csv, '--date', $Date); if ($Flag) { $specArgs += '--flag' }
+$json = (& $py (Join-Path $here 'julia_block_spec.py') @specArgs) | Out-String
 $spec = $json | ConvertFrom-Json
 if (-not $spec.ok) { Write-Output "🔴 引擎擋下，不寫 Julia：$($spec.reasons -join ' / ')"; exit 3 }
 $legs = @($spec.legs)
+if ($legs.Count -eq 0) { Write-Output "🔴 沒有可寫的腿：$($spec.reasons -join ' / ')"; exit 3 }
+$flags = @($spec.flags | Where-Object { $_ })
 Write-Output ("spec {0}: {1} 腿, 當沖 {2}, 平倉 {3}, 開 {4} 收 {5}" -f $spec.dot, $legs.Count, $spec.day_pnl, $spec.close_pnl, $spec.open_bal, $spec.close_bal)
 
 $dir = Split-Path -Parent $Target; $leaf = Split-Path -Leaf $Target
@@ -243,7 +248,15 @@ try {
     Write-Output ("寫入 W{0}:AB{1}｜合計={2} 核驗={3} 末腿X={4}" -f $hr, ($cur + $sumLines.Count - 1), $vt, $vc, $vx)
     $sumLines | ForEach-Object { Write-Output "  總結行：$_" }
     Write-Output ("RESULT_JSON " + (@{ header = $hr; legs = @($r1, $rN); day_summary = $daySum; close_summary = $closeSum; last = ($cur + $sumLines.Count - 1) } | ConvertTo-Json -Compress))
-    if ($errs.Count) { Write-Output ("🔴 核驗失敗，不存檔：" + ($errs -join ' / ')); $wb.Close($false); exit 8 }
+    if ($errs.Count -and -not $Flag) { Write-Output ("🔴 核驗失敗，不存檔：" + ($errs -join ' / ')); $wb.Close($false); exit 8 }
+    $flags += $errs
+    if ($flags.Count) {
+        $fr = $cur + $sumLines.Count
+        $c = $ws.Cells($fr, 23); $c.NumberFormat = '@'; $c.Value2 = '⚠️待修正：' + ($flags -join '；')
+        $c.Font.Color = 255; $c.Font.Bold = $true
+        Write-Output ("⚠️ 待修正（W$fr）：" + ($flags -join ' / '))
+        $code = 9
+    }
 
     if ($DryRun) { Write-Output 'DRY-RUN：核驗通過，未存檔'; $wb.Close($false); exit 0 }
     $bk = Join-Path $dir ('舊檔\' + [IO.Path]::GetFileNameWithoutExtension($leaf) + '_backup_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.xlsx')

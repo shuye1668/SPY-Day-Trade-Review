@@ -13,6 +13,7 @@ julia_block_spec.py — 給 julia_block_writer.ps1 用的「Julia 母檔個別�
 
 ok=false 時 reasons 列出擋下原因（BALANCE 對不上、非交易現金、非 100 股、其他 ⚠️），
 writer 一律不寫。留倉/跨日平倉本身不擋（§3b 已核定）。
+--flag（2026-10-30）：有 reasons 也 ok=true，reasons 同時放進 flags，writer 照寫並加紅字警示列。
 """
 import argparse
 import json
@@ -33,6 +34,7 @@ def main():
     ap.add_argument("csv_path")
     ap.add_argument("--date", required=True, help="EDT 交易日 YYYY-MM-DD")
     ap.add_argument("--trades", default=TRADES_PATH_DEFAULT)
+    ap.add_argument("--flag", action="store_true", help="不擋：reasons 轉 flags，ok=true")
     a = ap.parse_args()
 
     text = open(a.csv_path, encoding="utf-8-sig").read()
@@ -47,6 +49,9 @@ def main():
     s, st = sessions[idx], stats[idx]
 
     reasons = []
+    n_auto = sum(1 for f in s.fills if str(f.ref).startswith("AUTO"))
+    if n_auto:
+        reasons.append(f"Cash Balance 自動補列 {n_auto} 筆（費用由 Total Cash 推算）")
     if s.open_bal is None or s.close_bal is None:
         reasons.append("開盤/收盤餘額不明")
     for w in s.warnings:
@@ -104,13 +109,15 @@ def main():
     lines = []
     day_exits = [l for l in legs if l["kind"] == "day" and l["pnl"] is not None]
     if day_exits:
-        buy = sum(abs(legs[l["pair"]]["net"]) if legs[l["pair"]]["side"] == "BOT" else abs(l["net"])
-                  for l in day_exits)
-        lines.append(f"SPY當沖 {len(day_exits) * 100}股 損益 {fmt(day_pnl)} {fmt(day_pnl / buy * 100)}%")
+        buy = sum(abs(legs[l["pair"]]["net"]) if l.get("pair") is not None and legs[l["pair"]]["side"] == "BOT"
+                  else abs(l["net"]) for l in day_exits)
+        pct = f" {fmt(day_pnl / buy * 100)}%" if buy else ""
+        lines.append(f"SPY當沖 {len(day_exits) * 100}股 損益 {fmt(day_pnl)}{pct}")
     closes = [l for l in legs if l["kind"] == "close" and l["pnl"] is not None]
     if closes:
-        cost = sum(abs(l["entry"]["net"]) for l in closes)
-        lines.append(f"SPY平倉 {len(closes) * 100}股 損益 {fmt(close_pnl)} {fmt(close_pnl / cost * 100)}%")
+        cost = sum(abs(l["entry"]["net"]) for l in closes if l["entry"]["net"] is not None)
+        pct = f" {fmt(close_pnl / cost * 100)}%" if cost else ""
+        lines.append(f"SPY平倉 {len(closes) * 100}股 損益 {fmt(close_pnl)}{pct}")
     for l in legs:
         if l["kind"] == "hold":
             lines.append(f"SPY留倉 100股 * {l['price']:.4f}".rstrip("0").rstrip("."))
@@ -118,7 +125,7 @@ def main():
         lines[0] = head + lines[0]
 
     out = {
-        "ok": not reasons, "reasons": reasons,
+        "ok": not reasons or a.flag, "reasons": reasons, "flags": reasons if a.flag else [],
         "summary_lines": lines,
         "date": s.edt_date, "dot": s.edt_date.replace("-", "."),
         "open_bal": s.open_bal, "close_bal": s.close_bal,

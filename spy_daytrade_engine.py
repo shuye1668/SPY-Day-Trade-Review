@@ -134,6 +134,7 @@ class Session:
     trades: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
     notes: list = field(default_factory=list)   # ℹ️ 資訊（不擋寫入）：舊留倉續抱、跨區塊 BAL 落差
+    cash: list = field(default_factory=list)    # 非交易現金列（DOI/DEP/JRN…）：writer --flag 照寫進區塊（2026-10-30）
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -265,6 +266,7 @@ def group_sessions(fills):
         else:
             # DEP/JRN/其他現金異動（如入金）→ 記錄為 warning，交人工判斷（如 7/16 的 3 萬疑雲）
             if cur is not None:
+                cur.cash.append(f)
                 cur.warnings.append(
                     f"非交易現金異動 {f.cst_dt:%m/%d %H:%M} TYPE={f.typ} AMOUNT={f.amount} "
                     f"({f.desc[:40]}) — 需人工判斷是否入金/出金")
