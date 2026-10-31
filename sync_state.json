@@ -1,8 +1,8 @@
 {
-  "last_trade_date": "2026-10-29",
-  "status": "ok",
-  "note": "2026-10-29 人工指示補寫：10/30 匯出 Trade History 含對帳期間(10/23起)前的 10/22 成交（已在 trades_all），剔除後 _manual.csv 檢查 OK，--date 2026-10-29 寫入",
-  "updated_utc": "2026-10-30T03:08:56Z",
+  "last_trade_date": "2026-10-30",
+  "status": "flagged",
+  "note": "AUTO_FLAGGED 2026-10-30 待修正：SPY 配息 DOI +2077.72／JRN -623.32（淨 +1454.40）致 BALANCE 對不上；6 筆新留倉（多）",
+  "updated_utc": "2026-10-30T22:55:25Z",
   "host": "SHUYE07",
-  "latest_in_trades_all": "2026-10-29"
+  "latest_in_trades_all": "2026-10-30"
 }
