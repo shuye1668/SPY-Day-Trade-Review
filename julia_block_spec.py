@@ -104,7 +104,7 @@ def main():
     y, m, d = (int(x) for x in s.edt_date.split("-"))
     import datetime as _dt
     wd = "一二三四五六日"[_dt.date(y, m, d).weekday()]
-    head = f"{m:02d}/{d:02d}(周{wd})"
+    head = f"{m:02d}/{d:02d}({wd}) "   # 使用者 2026-11-02 手改範本：10/30(五) SPY…（日期後空一格、SPY 後空一格）
     fmt = lambda v: f"{v:+.2f}"
     lines = []
     day_exits = [l for l in legs if l["kind"] == "day" and l["pnl"] is not None]
@@ -112,16 +112,22 @@ def main():
         buy = sum(abs(legs[l["pair"]]["net"]) if l.get("pair") is not None and legs[l["pair"]]["side"] == "BOT"
                   else abs(l["net"]) for l in day_exits)
         pct = f" {fmt(day_pnl / buy * 100)}%" if buy else ""
-        lines.append(f"SPY當沖 {len(day_exits) * 100}股 損益 {fmt(day_pnl)}{pct}")
+        lines.append(f"SPY 當沖 {len(day_exits) * 100}股 損益 {fmt(day_pnl)}{pct}")
     closes = [l for l in legs if l["kind"] == "close" and l["pnl"] is not None]
     if closes:
         cost = sum(abs(l["entry"]["net"]) for l in closes if l["entry"]["net"] is not None)
         pct = f" {fmt(close_pnl / cost * 100)}%" if cost else ""
-        lines.append(f"SPY平倉 {len(closes) * 100}股 損益 {fmt(close_pnl)}{pct}")
-    for l in legs:
-        if l["kind"] == "hold":
-            lines.append(f"SPY留倉 100股 * {l['price']:.4f}".rstrip("0").rstrip("."))
+        lines.append(f"SPY 平倉 {len(closes) * 100}股 損益 {fmt(close_pnl)}{pct}")
+    # 當日新增留倉合併一行（使用者 2026-11-02 範本）：SPY 留倉 600股 *759.6036=455,762.18
+    hold_legs = [l for l in legs if l["kind"] == "hold"]
+    if hold_legs:
+        qty = len(hold_legs) * 100
+        cost = round(sum(abs(l["net"]) for l in hold_legs), 2)
+        avg = f"{cost / qty:.4f}".rstrip("0").rstrip(".")
+        lines.append(f"SPY 留倉 {qty}股 *{avg}={cost:,.2f}")
     if lines:
+        if not day_exits:
+            lines.insert(0, "SPY無當沖")   # 使用者範本「10/30(五) SPY無當沖」
         lines[0] = head + lines[0]
 
     out = {
