@@ -1,8 +1,8 @@
 {
-  "last_trade_date": "2026-10-30",
-  "status": "ok",
-  "note": "10/30 待修正已於 11/2 人工修正（配息/預扣稅入餘額鏈）",
-  "updated_utc": "2026-11-02T01:49:38Z",
+  "last_trade_date": "2026-11-02",
+  "status": "flagged",
+  "note": "AUTO_FLAGGED 2026-11-02 待修正：部分平倉（收盤仍有前日留倉續抱）——無核定範本",
+  "updated_utc": "2026-11-02T22:54:55Z",
   "host": "SHUYE07",
-  "latest_in_trades_all": "2026-10-30"
+  "latest_in_trades_all": "2026-11-02"
 }
