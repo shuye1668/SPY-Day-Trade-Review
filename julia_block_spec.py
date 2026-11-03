@@ -103,8 +103,10 @@ def main():
     # 總結行（§5 格式、與明細信主旨同款）：只第一行帶日期；周X 用交易日實際星期
     y, m, d = (int(x) for x in s.edt_date.split("-"))
     import datetime as _dt
-    wd = "一二三四五六日"[_dt.date(y, m, d).weekday()]
-    head = f"{m:02d}/{d:02d}({wd}) "   # 使用者 2026-11-02 手改範本：10/30(五) SPY…（日期後空一格、SPY 後空一格）
+    wd_of = lambda ds: "一二三四五六日"[_dt.date(*(int(x) for x in ds.split("-"))).weekday()]
+    md_of = lambda ds: "{1}/{2}".format(*(int(x) for x in ds.split("-")))
+    # 日期不補 0（會計帳 2026-11-03：11/2(一)）；日期後空一格、SPY 後空一格
+    head = f"{md_of(s.edt_date)}({wd_of(s.edt_date)}) "
     fmt = lambda v: f"{v:+.2f}"
     lines = []
     day_exits = [l for l in legs if l["kind"] == "day" and l["pnl"] is not None]
@@ -126,9 +128,20 @@ def main():
         avg = f"{cost / qty:.4f}".rstrip("0").rstrip(".")
         lines.append(f"SPY 留倉 {qty}股 *{avg}={cost:,.2f}")
     if lines:
-        if not day_exits:
-            lines.insert(0, "SPY無當沖")   # 使用者範本「10/30(五) SPY無當沖」
-        lines[0] = head + lines[0]
+        if not day_exits and not closes:
+            lines.insert(0, "SPY無當沖")   # 使用者範本「10/30(五) SPY無當沖」（只有新留倉的日子）
+        lines[0] = head + lines[0]       # 有平倉沒當沖：日期直接寫在平倉行（會計帳 11/2(一) SPY 平倉…）
+    # 有平倉、收盤仍有前日留倉續抱 → 依買進日各一行（會計帳 2026-11-03：10/30(五) SPY 留倉餘 100股 *760.8222）
+    if closes:
+        kept = {}
+        for h in holds_after:
+            if h["date"] < s.edt_date and h["net"] is not None:
+                q, c = kept.get(h["date"], (0, 0.0))
+                kept[h["date"]] = (q + h["qty"], c + abs(h["net"]))
+        for ds in sorted(kept):
+            q, c = kept[ds]
+            avg = f"{c / q:.4f}".rstrip("0").rstrip(".")
+            lines.append(f"{md_of(ds)}({wd_of(ds)}) SPY 留倉餘 {q}股 *{avg}")
 
     out = {
         "ok": not reasons or a.flag, "reasons": reasons, "flags": reasons if a.flag else [],

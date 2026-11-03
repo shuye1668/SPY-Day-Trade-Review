@@ -33,6 +33,12 @@ from zoneinfo import ZoneInfo
 
 FLAG = "⚠️需人工確認"
 TRADES_PATH_DEFAULT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trades_all.xlsx")
+# 2026-11-03 使用者核定：手上有前日多單留倉時，當日「沒有當日多單可平」的賣出直接平舊留倉
+# （Type 平、損益進平倉），之後買回的算新留倉；此日之前的 session 照舊先做當日配對
+# （先賣後買＝空單當沖）。使用者要求近期留倉期都套用：9 月起的留倉期（9/10–9/21、9/28–10/02、
+# 10/16–10/19、10/22–10/27、10/30–）都沒有留倉中先賣後買的交易，新舊規則結果逐筆相同，舊帳不必重算。
+# 6/22–7/08、7/21–7/31 有（約 40 筆空單當沖），維持舊規則。
+CARRY_FIRST_FROM = "2026-09-01"
 TW = ZoneInfo("Asia/Taipei")        # 台北 = 券商 statement "CST" 實際時區 (UTC+8, 無 DST)
 ET = ZoneInfo("America/New_York")   # EDT/EST，trades_all 用的時間
 
@@ -340,10 +346,20 @@ def pair_intraday(session, carry=None):
       1. 先照舊做當日 LIFO 配對，carry 不參與——當沖腿的結果與舊版完全相同；
       2. 收盤後仍未配到的 SOLD 腿（依時間序）才去平 carry，每筆取最晚建立的留倉（LIFO）
          → Type '平'、Status '2'、損益=平倉淨額+原留倉淨額，原留倉 Trade 改 Status '2' 並回指。
+      ★ 2026-11-03 使用者核定，CARRY_FIRST_FROM（2026-09-01）起的 session 改成：手上還有前日留倉時，當日沒有多單部位
+        可平的賣出直接平舊留倉（LIFO），之後買回的算新留倉——不再配成空單當沖。之前的 session 照舊。
     回傳收盤後仍未平的 lots（今日新留倉 + 舊留倉續抱），給下一個 session 當 carry。
     """
     stack = []  # 開倉 lots: {trade, qty_rem, source, sess}
+    held = [l for l in (carry or []) if l["trade"].side == "BOT"]
+    carry_first = session.edt_date >= CARRY_FIRST_FROM
     for t in session.trades:
+        # 新規則（CARRY_FIRST_FROM 起）：當日沒有多單部位可平的賣出 → 先平前日留倉（LIFO）
+        if (carry_first and t.side == "SOLD" and held and t.qty == held[-1]["trade"].qty
+                and not any(l["trade"].side == "BOT" for l in stack)):
+            t.action = "S"
+            _close_carry(session, t, held.pop())
+            continue
         signed = t.qty if t.side == "BOT" else -t.qty
         net_sign = 0
         if stack:
@@ -384,7 +400,6 @@ def pair_intraday(session, carry=None):
             t.pair_date = entry.edt_date
 
     # 收盤仍未配到的 SOLD 腿 → 平前日多單留倉（carry 取最晚建立者，LIFO）
-    held = [l for l in (carry or []) if l["trade"].side == "BOT"]
     for lot in [l for l in stack if l["trade"].side == "SOLD" and l["qty_rem"] == l["trade"].qty]:
         if not held:
             break
@@ -394,22 +409,7 @@ def pair_intraday(session, carry=None):
             held.append(en_lot)
             break
         stack.remove(lot)
-        t.type_tag = "平"
-        t.status = "2"
-        t.pair_date, t.pair_time = en.edt_date, en.edt_time
-        en.status = "2"
-        en.pair_date, en.pair_time = t.edt_date, t.edt_time
-        t.needs_review = True
-        if en.net_cash is None:
-            t.pnl = None
-            t.review_reason = "跨日平倉，但原留倉淨額無法精確取得 — 需人工確認"
-        else:
-            t.pnl = round(t.net_cash + en.net_cash, 2)
-            t.review_reason = f"跨日平倉（Status=2）— 平 {en.edt_date} {en.edt_time} 留倉 @{en.price}"
-        src = "（trades_all 原留倉列需改 Status '2' 並補 Pair）" if en_lot.get("source") == "trades_all" else ""
-        session.warnings.append(
-            f"跨日平倉：{t.edt_time} {t.side} {t.qty}股 @{t.price} 平 {en.edt_date} {en.edt_time} "
-            f"留倉 @{en.price}，損益 {'?' if t.pnl is None else f'{t.pnl:.2f}'}{src}")
+        _close_carry(session, t, en_lot)
 
     for lot in held:
         tr = lot["trade"]
@@ -424,6 +424,27 @@ def pair_intraday(session, carry=None):
         session.warnings.append(
             f"留倉：{lot['trade'].edt_time} {lot['trade'].side} {lot['qty_rem']}股 @{lot['trade'].price}")
     return held + stack
+
+
+def _close_carry(session, t, en_lot):
+    """SOLD 腿 t 平掉前日多單留倉 en_lot：Type '平'、Status '2'、損益=平倉淨額+原留倉淨額，雙向回指。"""
+    en = en_lot["trade"]
+    t.type_tag = "平"
+    t.status = "2"
+    t.pair_date, t.pair_time = en.edt_date, en.edt_time
+    en.status = "2"
+    en.pair_date, en.pair_time = t.edt_date, t.edt_time
+    t.needs_review = True
+    if en.net_cash is None:
+        t.pnl = None
+        t.review_reason = "跨日平倉，但原留倉淨額無法精確取得 — 需人工確認"
+    else:
+        t.pnl = round(t.net_cash + en.net_cash, 2)
+        t.review_reason = f"跨日平倉（Status=2）— 平 {en.edt_date} {en.edt_time} 留倉 @{en.price}"
+    src = "（trades_all 原留倉列需改 Status '2' 並補 Pair）" if en_lot.get("source") == "trades_all" else ""
+    session.warnings.append(
+        f"跨日平倉：{t.edt_time} {t.side} {t.qty}股 @{t.price} 平 {en.edt_date} {en.edt_time} "
+        f"留倉 @{en.price}，損益 {'?' if t.pnl is None else f'{t.pnl:.2f}'}{src}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
