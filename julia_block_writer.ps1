@@ -79,7 +79,7 @@ try {
         if ($ab -eq '留倉(多)' -and -not $tpl.hold) { $tpl.hold = $r }
         if ($x -eq '合計 ' -and -not $tpl.tot) { $tpl.tot = $r }
         if ($x -eq '核驗' -and -not $tpl.chk) { $tpl.chk = $r }
-        if ($w.EndsWith('當沖') -and -not $tpl.sum) { $tpl.sum = $r }
+        if (($w -match '^\d{4}\.\d{2}\.\d{2}\s*當沖$') -and -not $tpl.sum) { $tpl.sum = $r }
         if ($w.StartsWith('累積留倉') -and -not $tpl.hh) { $tpl.hh = $r; $tpl.hr = $r + 1 }
     }
     # 範本區塊沒有的列型（例如純當沖日沒有留倉列）→ 往上找最近一次出現的同類列
@@ -88,7 +88,7 @@ try {
         if (-not $tpl.day -and $ab -eq '多單') { $tpl.day = $r }
         if (-not $tpl.hold -and $ab -eq '留倉(多)') { $tpl.hold = $r }
         if (-not $tpl.hh -and $w.StartsWith('累積留倉')) { $tpl.hh = $r; $tpl.hr = $r + 1 }
-        if (-not $tpl.sum -and $w.EndsWith('當沖')) { $tpl.sum = $r }
+        if (-not $tpl.sum -and ($w -match '^\d{4}\.\d{2}\.\d{2}\s*當沖$')) { $tpl.sum = $r }
     }
     if (-not $tpl.day) { $tpl.day = $tpl.hold }; if (-not $tpl.hold) { $tpl.hold = $tpl.day }
     if (-not $tpl.day -or -not $tpl.tot -or -not $tpl.chk -or -not $tpl.sum) { Write-Output 'ABORT：範本列不齊（多單/合計/核驗/當沖彙總）'; $wb.Close($false); exit 7 }

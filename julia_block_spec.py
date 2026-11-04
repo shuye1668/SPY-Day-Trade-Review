@@ -113,12 +113,12 @@ def main():
     if day_exits:
         buy = sum(abs(legs[l["pair"]]["net"]) if l.get("pair") is not None and legs[l["pair"]]["side"] == "BOT"
                   else abs(l["net"]) for l in day_exits)
-        pct = f" {fmt(day_pnl / buy * 100)}%" if buy else ""
+        pct = f"  {fmt(day_pnl / buy * 100)}%" if buy else ""   # % 前兩格（會計帳 10/29、11/2、11/3 寫法，2026-11-04 使用者核定）
         lines.append(f"SPY 當沖 {len(day_exits) * 100}股 損益 {fmt(day_pnl)}{pct}")
     closes = [l for l in legs if l["kind"] == "close" and l["pnl"] is not None]
     if closes:
         cost = sum(abs(l["entry"]["net"]) for l in closes if l["entry"]["net"] is not None)
-        pct = f" {fmt(close_pnl / cost * 100)}%" if cost else ""
+        pct = f"  {fmt(close_pnl / cost * 100)}%" if cost else ""   # % 前兩格，同上
         lines.append(f"SPY 平倉 {len(closes) * 100}股 損益 {fmt(close_pnl)}{pct}")
     # 當日新增留倉合併一行（使用者 2026-11-02 範本）：SPY 留倉 600股 *759.6036=455,762.18
     hold_legs = [l for l in legs if l["kind"] == "hold"]
