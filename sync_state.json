@@ -1,8 +1,8 @@
 {
   "last_trade_date": "2026-11-04",
-  "status": "ok",
-  "note": "11/6 無新成交",
-  "updated_utc": "2026-11-06T22:54:44Z",
+  "status": "failed",
+  "note": "2026-11-10 匯出帳戶不對：Boss 匯出 51489806SCHW（11/3-11/9 無成交、現金 121,955.19 不變），非主帳 58715520SCHW；Gmail 無 Autosend 信/草稿 → 無法確認 11/9 主帳是否有成交，未寫帳",
+  "updated_utc": "2026-11-09T22:54:09Z",
   "host": "SHUYE07",
   "latest_in_trades_all": "2026-11-04"
 }
