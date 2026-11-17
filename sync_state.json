@@ -1,8 +1,8 @@
 {
   "last_trade_date": "2026-11-13",
-  "status": "failed",
-  "note": "2026-11-17 Boss 未跑或推送失敗：git 可用（origin/main 最新 boss sync 11/14 06:13），_inbox 無 2026-11-17.csv；Gmail 寄件/草稿無 [SPY-DayTrade-Autosend]；11/16 美股有開盤",
-  "updated_utc": "2026-11-16T22:54:26Z",
+  "status": "ok",
+  "note": "11/16 無新成交（Boss 14:48 補跑匯出 2026-11-17.csv，僅 BAL 列，現金 2,239,824.35 不變）",
+  "updated_utc": "2026-11-17T06:52:53Z",
   "host": "SHUYE07",
   "latest_in_trades_all": "2026-11-13"
 }
