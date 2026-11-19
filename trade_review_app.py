@@ -885,7 +885,43 @@ def ledger_currency():
     if df is None or "Date" not in df.columns:return None
     ds=[d for d in (_norm_date(v) for v in df["Date"].dropna().unique()) if d]
     if not ds:return None
-    return {"latest":max(ds),"rows":int(len(df))}
+    out={"latest":max(ds),"rows":int(len(df))}
+    try:
+        cov=statement_coverage(out["latest"])
+        if cov:out.update(cov)
+    except Exception as e:
+        print(f"[ledger] statement_coverage failed: {e}")
+    return out
+
+_STMT_RE=__import__("re").compile(r"since\s+(\d{1,2})/(\d{1,2})/(\d{2})\s+through\s+(\d{1,2})/(\d{1,2})/(\d{2})")
+def statement_coverage(ledger_latest):
+    """2026-11-19：無成交日帳本最新日不會前進，徽章誤報「落後 N 個交易日」。
+    讀 _inbox\\ 最新對帳單的 through 日：若對帳單內所有 TRD 的交易日（CST−12h）都 ≤ 帳本最新日，
+    代表 through 之前沒有未入帳成交 → 回傳 covered_through=through，前端用它算落後。"""
+    files=[f for f in glob.glob(_os.path.join(ROOT_FOLDER,"_inbox","????-??-??*.csv"))]
+    best=None
+    for f in files:
+        try:
+            with open(f,encoding="utf-8-sig",errors="replace") as fh:head=fh.readline()
+        except Exception:continue
+        m=_STMT_RE.search(head)
+        if not m:continue
+        thr=f"20{m.group(6)}-{int(m.group(4)):02d}-{int(m.group(5)):02d}"
+        if best is None or thr>best[0]:best=(thr,f)
+    if not best:return None
+    thr,f=best
+    max_trd=None
+    import csv
+    with open(f,encoding="utf-8-sig",errors="replace") as fh:
+        for row in csv.reader(fh):
+            if len(row)>3 and row[2].strip()=="TRD":
+                try:t=dt.datetime.strptime(row[0].strip()+" "+row[1].strip(),"%m/%d/%y %H:%M:%S")
+                except ValueError:continue
+                d=(t-dt.timedelta(hours=12)).strftime("%Y-%m-%d")
+                if max_trd is None or d>max_trd:max_trd=d
+    unposted=bool(max_trd and max_trd>ledger_latest)
+    return {"stmt_through":thr,"stmt_file":_os.path.basename(f),"stmt_max_trade":max_trd,
+            "covered_through":(None if unposted else max(thr,ledger_latest))}
 
 # ── 當日行情統計（2026-10-20 使用者要求：儀表板下方加 漲跌幅%／漲跌／收盤價／YTD／距52週高點%）──
 # 日線來源：yfinance SPY 日線（auto_adjust=False＝實際收盤價，含 1993 起全部歷史），
@@ -3494,13 +3530,18 @@ function renderLedgerBadge(l){
   if(!el)return;
   if(!l||!l.latest){el.style.display="none";return;}
   el.style.display="";
-  const behind=tradingDaysBehind(l.latest);
+  // 2026-11-19：無成交日帳本最新日不前進 → 改以「對帳單已核至」日（covered_through）算落後
+  const cov=(l.covered_through&&l.covered_through>l.latest)?l.covered_through:null;
+  const behind=tradingDaysBehind(cov||l.latest);
   let color="#6B7280",txt=`帳本最新 ${l.latest}`;
+  if(cov)txt+=` ✓已核至 ${cov}（無新成交）`;
   if(behind>=2){color="#FF4444";txt+=` ✕落後 ${behind} 個交易日`;}
   else if(behind===1){color="#E0A800";txt+=" ⚠待補前一交易日";}
   el.style.color=color;
   el.textContent=txt;
   el.title=`trades_all.xlsx 實際最新交易日=${l.latest}（共 ${l.rows} 列）\n`
+           +(l.stmt_through?`最新對帳單 ${l.stmt_file} 涵蓋至 ${l.stmt_through}；其中最後成交日=${l.stmt_max_trade||"無"}`
+              +(l.covered_through?"（皆已入帳）":"（✕有未入帳成交）")+`\n`:"")
            +`最新美股交易日=${getLatestUSTradeDate()}  落後=${behind}\n`
            +`只反映帳本內容，與採集腳本心跳無關。`;
 }
