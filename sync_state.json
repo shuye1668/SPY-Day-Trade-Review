@@ -1,8 +1,8 @@
 {
-  "last_trade_date": "2026-11-13",
+  "last_trade_date": "2026-11-19",
   "status": "ok",
-  "note": "無新成交（11/16-11/18 美股無成交；11/19 CSV 證實，最新入帳 11/13）",
-  "updated_utc": "2026-11-18T22:54:28Z",
+  "note": "",
+  "updated_utc": "2026-11-19T22:55:17Z",
   "host": "SHUYE07",
-  "latest_in_trades_all": "2026-11-13"
+  "latest_in_trades_all": "2026-11-19"
 }
