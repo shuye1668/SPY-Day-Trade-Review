@@ -1,0 +1,61 @@
+﻿Account Statement for 58715520SCHW (Individual) since 11/18/26 through 11/24/26
+
+Cash Balance
+DATE,TIME,TYPE,REF #,DESCRIPTION,Misc Fees,Commissions & Fees,AMOUNT,BALANCE
+11/18/26,14:00:00,BAL,,Cash balance at the start of business day 18.11 CST,,,,"2,239,824.35"
+11/19/26,14:00:00,BAL,,Cash balance at the start of business day 19.11 CST,,,,"2,239,824.35"
+11/19/26,23:34:23,TRD,="1008731486922",SOLD -100 SPY @728.615,-1.50,,"72,861.50","2,312,684.35"
+11/20/26,14:00:00,BAL,,Cash balance at the start of business day 20.11 CST,,,,"2,312,684.35"
+11/21/26,14:00:00,BAL,,Cash balance at the start of business day 21.11 CST,,,,"2,312,684.35"
+11/22/26,14:00:00,BAL,,Cash balance at the start of business day 22.11 CST,,,,"2,312,684.35"
+11/23/26,14:00:00,BAL,,Cash balance at the start of business day 23.11 CST,,,,"2,312,684.35"
+11/23/26,22:31:30,TRD,="1008765193718",SOLD -100 SPY @722.305,-1.49,,"72,230.50","2,384,913.36"
+11/23/26,22:52:49,TRD,="1008766990595",BOT +40 SPY @716.98,,,"-28,679.20","2,356,234.16"
+11/23/26,22:52:49,TRD,="1008766990595",BOT +60 SPY @716.98,,,"-43,018.80","2,313,215.36"
+11/23/26,23:00:14,TRD,="1008766991645",BOT +100 SPY @722.055,,,"-72,205.50","2,241,009.86"
+11/24/26,14:00:00,BAL,,Cash balance at the start of business day 24.11 CST,,,,"2,241,009.86"
+11/24/26,23:28:00,TRD,="1008785806762",SOLD -100 SPY @714.12,-1.47,,"71,412.00","2,312,420.39"
+11/24/26,23:43:42,TRD,="1008786628775",SOLD -100 SPY @714.5101,-1.47,,"71,451.01","2,383,869.93"
+,,,,TOTAL,($5.93),,"$144,051.51","$2,383,869.93"
+
+ 
+"Total Cash $2,383,869.93"
+
+
+Account Order History
+Notes,,Time Placed,Spread,Side,Qty,Pos Effect,Symbol,Exp,Strike,Type,PRICE,,TIF,Status
+,,11/24/26 23:43:42,STOCK,SELL,-100,TO CLOSE,SPY,,,ETF,~,MKT,DAY,FILLED
+,,11/24/26 23:28:00,STOCK,SELL,-100,TO CLOSE,SPY,,,ETF,~,MKT,DAY,FILLED
+,,11/23/26 23:00:14,STOCK,BUY,+100,TO OPEN,SPY,,,ETF,~,MKT,DAY,FILLED
+,,11/23/26 22:52:49,STOCK,BUY,+100,TO OPEN,SPY,,,ETF,~,MKT,DAY,FILLED
+,,11/23/26 22:31:29,STOCK,SELL,-100,TO CLOSE,SPY,,,ETF,~,MKT,DAY,FILLED
+,,11/19/26 23:34:22,STOCK,SELL,-100,TO CLOSE,SPY,,,ETF,~,MKT,DAY,FILLED
+
+Account Trade History
+,Exec Time,Spread,Side,Qty,Pos Effect,Symbol,Exp,Strike,Type,Price,Net Price,Order Type
+,11/24/26 23:43:42,STOCK,SELL,-100,TO CLOSE,SPY,,,ETF,714.5101,714.5101,MKT
+,11/24/26 23:28:00,STOCK,SELL,-100,TO CLOSE,SPY,,,ETF,714.12,714.12,MKT
+,11/23/26 23:00:14,STOCK,BUY,+100,TO OPEN,SPY,,,ETF,722.055,722.055,MKT
+,11/23/26 22:52:49,STOCK,BUY,+60,TO OPEN,SPY,,,ETF,716.98,716.98,MKT
+,11/23/26 22:52:49,STOCK,BUY,+40,TO OPEN,SPY,,,ETF,716.98,716.98,MKT
+,11/23/26 22:31:30,STOCK,SELL,-100,TO CLOSE,SPY,,,ETF,722.305,722.305,MKT
+,11/19/26 23:34:23,STOCK,SELL,-100,TO CLOSE,SPY,,,ETF,728.615,728.615,MKT
+
+Equities
+Symbol,Description,Qty,Trade Price
+SPY,State Street SPDR S&P 500 ETF Trust,+1100,750.3233
+,OVERALL TOTALS,,
+
+Profits and Losses
+Symbol,Description,P/L Open,P/L %,P/L Day,P/L YTD,P/L Diff,Margin Req,Mark Value
+SPY,State Street SPDR S&P 500 ETF Trust,"($35,346.68)",-4.28%,"($6,104.99)","$40,407.86","($15,199.49)",$0.00,"$790,009.00"
+,OVERALL TOTALS,"($35,346.68)",-4.28%,"($6,104.99)","$40,407.86","($15,199.49)",$0.00,"$790,009.00"
+
+Account Summary
+Net Liquidating Value,"$3,173,878.93"
+Stock Buying Power,"$2,383,869.93"
+Option Buying Power,"$2,383,869.93"
+Intraday Buying Power,N/A
+Equity Commissions & Fees YTD,$42.27
+Futures Commissions & Fees YTD,$0.00
+Total Commissions & Fees YTD,$42.27
